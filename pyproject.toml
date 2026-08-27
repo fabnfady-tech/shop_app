@@ -5,6 +5,8 @@ description = "Aleefy Pets App"
 dependencies = [
     "flet",
     "fpdf2",
+    "arabic_reshaper",
+    "python-bidi",
 ]
 
 [tool.flet]
