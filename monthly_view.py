@@ -14,40 +14,53 @@ def MonthlyView(page: ft.Page):
     today = date.today()
     state = {"year": today.year, "month": today.month, "search_date": ""}
 
-    month_label = ft.Text("", size=16, weight=ft.FontWeight.BOLD)
+    month_label = ft.Text("", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
+    
     search_field = ft.TextField(
-        label="ابحث بتاريخ (YYYY-MM-DD) أو برقم فاتورة (INV-00001)", rtl=True, expand=True,
+        label="ابحث بتاريخ (YYYY-MM-DD) أو برقم فاتورة (INV-00001)", 
+        rtl=True, 
+        expand=True,
+        color=ft.Colors.WHITE,
+        label_style=ft.TextStyle(color=ft.Colors.WHITE70),
+        border_color=ft.Colors.WHITE38,
         on_change=lambda e: (state.update(search_date=e.control.value), refresh_table()),
     )
+    
     table = ft.DataTable(
         columns=[
-            ft.DataColumn(ft.Text("السيريال")),
-            ft.DataColumn(ft.Text("التاريخ")),
-            ft.DataColumn(ft.Text("الإجمالي")),
-            ft.DataColumn(ft.Text("نوع الدفع")),
-            ft.DataColumn(ft.Text("تفاصيل")),
+            ft.DataColumn(ft.Text("السيريال", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("التاريخ", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("الإجمالي", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("نوع الدفع", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
+            ft.DataColumn(ft.Text("تفاصيل", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD)),
         ],
         rows=[],
     )
-    detail_panel = ft.Container(visible=False, padding=12, border_radius=10,
-                                 bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST)
-    summary_text = ft.Text("", size=14, color=ft.Colors.GREY_700)
+    
+    detail_panel = ft.Container(
+        visible=False, 
+        padding=12, 
+        border_radius=10,
+        bgcolor=ft.Colors.BLUE_GREY_900
+    )
+    
+    summary_text = ft.Text("", size=14, color=ft.Colors.WHITE, weight=ft.FontWeight.W_500)
 
     def show_detail(sale_id):
         serial = db.invoice_serial(sale_id)
         items = db.get_sale_items(sale_id)
         rows = [
             ft.Row([
-                ft.Text(it["product_name"], expand=True, size=13),
-                ft.Text(f'{it["quantity"]:g} {"كجم" if it["unit"] == "كيلو" else "قطعة"}', size=12),
-                ft.Text(f'{it["quantity"] * it["unit_price"]:.2f} ج.م', size=12),
+                ft.Text(it["product_name"], expand=True, size=13, color=ft.Colors.WHITE),
+                ft.Text(f'{it["quantity"]:g} {"كجم" if it["unit"] == "كيلو" else "قطعة"}', size=12, color=ft.Colors.WHITE70),
+                ft.Text(f'{it["quantity"] * it["unit_price"]:.2f} ج.م', size=12, color=ft.Colors.WHITE),
             ])
             for it in items
         ]
         detail_panel.content = ft.Column(
-            [ft.Row([ft.Text(f"تفاصيل فاتورة {serial}", weight=ft.FontWeight.BOLD),
-                     ft.IconButton(ft.Icons.CLOSE, icon_size=16, on_click=lambda e: hide_detail())]),
-             ft.Divider(), *rows]
+            [ft.Row([ft.Text(f"تفاصيل فاتورة {serial}", weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                     ft.IconButton(ft.Icons.CLOSE, icon_size=16, icon_color=ft.Colors.WHITE, on_click=lambda e: hide_detail())]),
+             ft.Divider(color=ft.Colors.WHITE24), *rows]
         )
         detail_panel.visible = True
         page.update()
@@ -69,18 +82,18 @@ def MonthlyView(page: ft.Page):
             total += s["total"]
             table.rows.append(
                 ft.DataRow(cells=[
-                    ft.DataCell(ft.Text(db.invoice_serial(s["id"]), size=12)),
-                    ft.DataCell(ft.Text(s["created_at"][:16], size=12)),
-                    ft.DataCell(ft.Text(f'{s["total"]:.2f}', size=12)),
-                    ft.DataCell(ft.Text(s["payment_type"], size=12)),
-                    ft.DataCell(ft.TextButton("عرض", on_click=lambda e, sid=s["id"]: show_detail(sid))),
+                    ft.DataCell(ft.Text(db.invoice_serial(s["id"]), size=12, color=ft.Colors.WHITE)),
+                    ft.DataCell(ft.Text(s["created_at"][:16], size=12, color=ft.Colors.WHITE)),
+                    ft.DataCell(ft.Text(f'{s["total"]:.2f}', size=12, color=ft.Colors.WHITE)),
+                    ft.DataCell(ft.Text(s["payment_type"], size=12, color=ft.Colors.WHITE)),
+                    ft.DataCell(ft.TextButton("عرض", style=ft.ButtonStyle(color=ft.Colors.CYAN_200), on_click=lambda e, sid=s["id"]: show_detail(sid))),
                 ])
             )
         summary_text.value = f"عدد الفواتير: {len(sales)}   |   إجمالي الشهر: {total:.2f} ج.م"
         page.update()
 
-    prev_btn = ft.IconButton(ft.Icons.ARROW_FORWARD, on_click=lambda e: change_month(-1))
-    next_btn = ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: change_month(1))
+    prev_btn = ft.IconButton(ft.Icons.ARROW_FORWARD, icon_color=ft.Colors.WHITE, on_click=lambda e: change_month(-1))
+    next_btn = ft.IconButton(ft.Icons.ARROW_BACK, icon_color=ft.Colors.WHITE, on_click=lambda e: change_month(1))
 
     def change_month(delta):
         m = state["month"] + delta
@@ -99,7 +112,7 @@ def MonthlyView(page: ft.Page):
 
     return ft.Column(
         [
-            ft.Text("جدول الشهر", size=20, weight=ft.FontWeight.BOLD),
+            ft.Text("جدول الشهر", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             search_field,
             ft.Row([prev_btn, month_label, next_btn], alignment=ft.MainAxisAlignment.CENTER),
             summary_text,
