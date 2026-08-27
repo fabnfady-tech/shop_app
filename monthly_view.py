@@ -1,5 +1,5 @@
 """
-شاشة جدول الشهر - مرتبة ومنسقة بالكامل لتجنب الالتصاق العلوي وتسهيل البحث عن طريق اليوم والسيريال
+شاشة جدول الشهر - مرتبة ومنسقة بالكامل ومحدثة لتتوافق مع كافة إصدارات Flet
 """
 import flet as ft
 import db
@@ -60,7 +60,7 @@ def MonthlyView(page: ft.Page):
         padding=10, 
         border_radius=10,
         bgcolor=ft.Colors.BLUE_GREY_900,
-        border=ft.border.all(1, ft.Colors.WHITE24)
+        border=ft.Border.all(1, ft.Colors.WHITE24)  # تم التعديل إلى Border بحرف كبير
     )
     
     summary_text = ft.Text("", size=12, color=ft.Colors.WHITE70, weight=ft.FontWeight.W_500)
@@ -150,13 +150,13 @@ def MonthlyView(page: ft.Page):
 
     return ft.Column(
         [
-            # مسافة أمان رأسية واضحة تمنع الالتصاق بشريط الموبايل العلوي
+            # مسافة أمان رأسية تمنع الالتصاق
             ft.Container(height=10),
             page_title,
             ft.Divider(color=ft.Colors.WHITE12, height=4),
             # حقول البحث مرتبة (سيريال + يوم)
             ft.Row([serial_search, day_search], spacing=6, alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            # شريط تصفح الأشهر بتصميم منسق
+            # شريط تصفح الأشهر
             ft.Container(
                 content=ft.Row([prev_btn, month_label, next_btn], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
                 bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
@@ -167,7 +167,7 @@ def MonthlyView(page: ft.Page):
             ft.Container(
                 content=ft.Column([table], scroll=ft.ScrollMode.AUTO), 
                 height=280,
-                border=ft.border.all(1, ft.Colors.WHITE12),
+                border=ft.Border.all(1, ft.Colors.WHITE12),  # تم التعديل إلى Border بحرف كبير
                 border_radius=8,
                 padding=2
             ),
