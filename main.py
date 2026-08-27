@@ -44,8 +44,8 @@ def main(page: ft.Page):
 
     current_index = {"value": 0}
 
-    # تم تصغير الحشوة من 15 إلى 8 لتوفير مساحة عرض أوسع للموبايل والتابلت
-    body_container = ft.Container(expand=True, padding=8)
+    # تم ضبط المسافة العلوية (top=8) لتكون مريحة تماماً ولا تلتصق بشريط الموبايل
+    body_container = ft.Container(expand=True, padding=ft.padding.only(left=8, right=8, top=8, bottom=8))
     title_text = ft.Text(PAGES[0][0], size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
 
     sidebar_content = ft.Column([], expand=True, spacing=5)
@@ -82,7 +82,7 @@ def main(page: ft.Page):
         page.update()
 
     def load_page_view(view_fn):
-        # تغليف الشاشة داخل Column قابل للتمرير للأسفل والعرض
+        # تغليف الشاشة داخل Column قابل للتمرير للأسفل
         body_container.content = ft.Column(
             [view_fn(page)],
             scroll=ft.ScrollMode.AUTO,
