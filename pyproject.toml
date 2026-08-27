@@ -1,7 +1,11 @@
 [project]
-name = 'shop_app'
-version = '1.0.0'
-description = 'تطبيق أدارة محل '
+name = "aleefy_pets"
+version = "0.1.0"
+description = "Aleefy Pets App"
+dependencies = [
+    "flet",
+    "fpdf2",
+]
+
 [tool.flet]
-org = 'com.example'
-product = 'Shop App'
+product_name = "Aleefy Pets"
