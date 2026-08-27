@@ -30,16 +30,14 @@ def main(page: ft.Page):
     page.padding = 0
     page.bgcolor = "#13162d"  # لون كحلي دافئ متناسق مع اللوجو
 
-    # --- الإضافة الرئيسية لحل مشكلة الخطوط والمظهر الداكن عبر التطبيق بالكامل ---
+    # تفعيل وضع Dark Mode وتثبيت النصوص باللون الأبيض الواضح
     page.theme_mode = ft.ThemeMode.DARK
     page.theme = ft.Theme(
         color_scheme=ft.ColorScheme(
-            on_surface=ft.Colors.WHITE,       # يجعل كل النصوص الافتراضية والجداول باللون الأبيض
-            on_background=ft.Colors.WHITE,    # يجعل نصوص الخلفيات واضحة
-            primary=ft.Colors.ORANGE_400,     # ألوان التحديد والأزرار
+            on_surface=ft.Colors.WHITE,
+            primary=ft.Colors.ORANGE_400,
         )
     )
-    # --------------------------------------------------------------------------
 
     if os.path.exists(ICON_PATH):
         page.window_icon = ICON_PATH
