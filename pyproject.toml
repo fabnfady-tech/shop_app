@@ -1,0 +1,7 @@
+[project]
+name = 'shop_app'
+version = '1.0.0'
+description = 'تطبيق أدارة محل '
+[tool.flet]
+org = 'com.example'
+product = 'Shop App'
