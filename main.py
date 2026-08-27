@@ -44,8 +44,8 @@ def main(page: ft.Page):
 
     current_index = {"value": 0}
 
-    # تم ضبط المسافة العلوية (top=8) لتكون مريحة تماماً ولا تلتصق بشريط الموبايل
-    body_container = ft.Container(expand=True, padding=ft.padding.only(left=8, right=8, top=8, bottom=8))
+    # استخدام قيمة رقمية آمنة متوافقة مع كافة إصدارات Flet
+    body_container = ft.Container(expand=True, padding=8)
     title_text = ft.Text(PAGES[0][0], size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
 
     sidebar_content = ft.Column([], expand=True, spacing=5)
@@ -133,7 +133,7 @@ def main(page: ft.Page):
     app_bar = ft.Container(
         height=60,
         bgcolor=ft.Colors.with_opacity(0.85, "#181b36"),
-        padding=ft.Padding.only(left=15, right=15),
+        padding=15,
         content=ft.Row([
             ft.IconButton(ft.Icons.MENU, icon_color=ft.Colors.WHITE, on_click=open_sidebar),
             title_text,
