@@ -1,17 +1,32 @@
 import sqlite3
 
-# الاتصال بقاعدة البيانات مباشرة
 conn = sqlite3.connect("shop.db")
 cursor = conn.cursor()
 
-# مسح المبيعات وعناصر الفواتير
-cursor.execute("DELETE FROM sale_items;")
-cursor.execute("DELETE FROM sales;")
+# قائمة الجداول المراد إفراغها (المبيعات، الدليفري، المرتجعات، والمصروفات)
+tables_to_clear = [
+    "sale_items",
+    "sales",
+    "returns",
+    "return_items",
+    "expenses",
+]
 
-# تصفير العداد لتبدأ الطلبات والفواتير من رقم 1
-cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('sales', 'sale_items');")
+for table in tables_to_clear:
+    try:
+        cursor.execute(f"DELETE FROM {table};")
+    except sqlite3.OperationalError:
+        pass  # التجاوز في حال عدم وجود أحد الجداول بنفس الاسم
+
+# تصفير عدادات الترقيم التلقائي للجداول الممحيّة
+cursor.execute(
+    """
+    DELETE FROM sqlite_sequence 
+    WHERE name IN ('sales', 'sale_items', 'returns', 'return_items', 'expenses');
+"""
+)
 
 conn.commit()
 conn.close()
 
-print("تم إفراغ صفحة الدليفري وجدول الشهر بنجاح!")
+print("تم مسح بيانات المبيعات، الدليفري، المرتجعات، والتقارير بنجاح!")
