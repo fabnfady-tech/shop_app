@@ -43,6 +43,12 @@ def ReportsView(page: ft.Page):
         income_row = ft.Row(
             [
                 stat_card("نقدي (فوري)", f'{report["cash_income"]:.2f} ج.م', ft.Colors.GREEN_700, ft.Icons.PAID),
+                stat_card("محفظة 📱", f'{report["wallet_income"]:.2f} ج.م', ft.Colors.BLUE_700, ft.Icons.PHONE_ANDROID),
+            ],
+            spacing=10,
+        )
+        income_row2 = ft.Row(
+            [
                 stat_card("محصّل من الآجل", f'{report["deferred_collected"]:.2f} ج.م', ft.Colors.TEAL_700, ft.Icons.ASSIGNMENT_TURNED_IN),
             ],
             spacing=10,
@@ -82,6 +88,7 @@ def ReportsView(page: ft.Page):
         content_col.controls.append(ft.Text("تقرير اليوم", size=20, weight=ft.FontWeight.BOLD))
         content_col.controls.append(net_card)
         content_col.controls.append(income_row)
+        content_col.controls.append(income_row2)
         content_col.controls.append(expenses_row)
         content_col.controls.append(deferred_card)
 

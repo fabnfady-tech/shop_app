@@ -19,12 +19,19 @@ def ReturnsView(page: ft.Page):
     status_text = ft.Text("", color=ft.Colors.RED)
     returns_list = ft.ListView(expand=True, spacing=8, padding=ft.Padding.all(5))
 
+    available_text = ft.Text("", size=12, color=ft.Colors.GREY_700)
+
     def on_product_change(e):
         pid = int(product_dd.value) if product_dd.value else None
         p = next((p for p in products if p["id"] == pid), None)
         if p:
             qty_field.value = "1"
             refund_field.value = f'{p["price"]:.2f}'
+            returnable = db.get_product_returnable_quantity(pid)
+            unit_label = "كجم" if p["unit"] == "كيلو" else "قطعة"
+            available_text.value = f"أقصى كمية ممكن ترجعها من المنتج ده: {returnable:g} {unit_label}"
+        else:
+            available_text.value = ""
         page.update()
 
     product_dd.on_change = on_product_change
@@ -74,12 +81,18 @@ def ReturnsView(page: ft.Page):
 
         pid = int(product_dd.value)
         p = next((p for p in products if p["id"] == pid), None)
-        db.add_return(pid, p["name"] if p else "منتج محذوف", qty, refund, reason_field.value)
+        try:
+            db.add_return(pid, p["name"] if p else "منتج محذوف", qty, refund, reason_field.value)
+        except db.ReturnValidationError as ex:
+            status_text.value = str(ex)
+            page.update()
+            return
 
         product_dd.value = None
         qty_field.value = ""
         refund_field.value = ""
         reason_field.value = ""
+        available_text.value = ""
         refresh_list()
         page.update()
 
@@ -91,6 +104,7 @@ def ReturnsView(page: ft.Page):
         [
             ft.Text("المرتجعات", size=20, weight=ft.FontWeight.BOLD),
             ft.Row([product_dd, qty_field]),
+            available_text,
             ft.Row([refund_field, reason_field]),
             save_btn,
             status_text,

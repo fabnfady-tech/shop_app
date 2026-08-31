@@ -22,6 +22,15 @@ def ProductsView(page: ft.Page):
         value=db.UNITS[0],
     )
 
+    # شريط البحث الجديد
+    search_field = ft.TextField(
+        hint_text="ابحث باسم المنتج أو التصنيف...",
+        prefix_icon=ft.Icons.SEARCH,
+        rtl=True,
+        expand=True,
+        on_change=lambda e: refresh_list()  # تصفية القائمة فور الكتابة
+    )
+
     editing_id = {"value": None}
     status_text = ft.Text("", color=ft.Colors.RED)
 
@@ -39,10 +48,17 @@ def ProductsView(page: ft.Page):
     def refresh_list():
         products_list.controls.clear()
         items = db.get_products()
+        
+        # تصفية القائمة حسب نص البحث
+        query = search_field.value.strip().lower() if search_field.value else ""
+        if query:
+            items = [p for p in items if query in p["name"].lower() or query in p["category"].lower()]
+
         if not items:
+            msg = "لا توجد نتائج مطابقة للبحث" if query else "لسه معملتش أي منتجات، ضيف أول منتج من فوق"
             products_list.controls.append(
                 ft.Container(
-                    content=ft.Text("لسه معملتش أي منتجات، ضيف أول منتج من فوق", color=ft.Colors.GREY),
+                    content=ft.Text(msg, color=ft.Colors.GREY),
                     padding=20, alignment=ft.Alignment.CENTER,
                 )
             )
@@ -141,7 +157,14 @@ def ProductsView(page: ft.Page):
             ft.Row([save_btn, cancel_btn]),
             status_text,
             ft.Divider(),
-            ft.Text("المنتجات الحالية", size=14, color=ft.Colors.GREY_700),
+            # عنوان المنتجات الحالية وجانبه شريط البحث
+            ft.Row(
+                [
+                    ft.Text("المنتجات الحالية", size=14, color=ft.Colors.GREY_700),
+                    search_field,
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
             products_list,
         ],
         expand=True,

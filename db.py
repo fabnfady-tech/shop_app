@@ -2,16 +2,28 @@
 طبقة قاعدة البيانات - SQLite محلي بالكامل
 """
 import sqlite3
+import hashlib
 from datetime import datetime, date
 from contextlib import contextmanager
 import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "shop.db")
 
-PRODUCT_CATEGORIES = ["طعام", "إكسسوارات", "أدوية وعناية", "ألعاب", "نظافة",'حيوانات', 'زواحف','طيور','اسماك', "أخرى"]
-EXPENSE_CATEGORIES = ["إيجار", "رواتب", "فواتير (كهرباء / مياه / نت)", "شراء بضاعة",
-                       "صيانة", "سلف", "إهلاك", "أخرى"]
+PRODUCT_CATEGORIES = ["طعام", "إكسسوارات", "أدوية وعناية", "ألعاب", "نظافة", "حيوانات", "زواحف", "طيور", "اسماك", "أخرى"]
+EXPENSE_CATEGORIES = ["إيجار", "رواتب", "فواتير (كهرباء / مياه / نت)", "شراء بضاعة", "صيانة", "سلف", "إهلاك", "أخرى"]
 UNITS = ["قطعة", "كيلو"]
+
+EPSILON = 1e-6
+
+
+class ReturnValidationError(Exception):
+    """تُثار عند تسجيل مرتجع غير منطقي."""
+    pass
+
+
+class PaymentValidationError(Exception):
+    """تُثار عند تسجيل دفعة غير صحيحة."""
+    pass
 
 
 @contextmanager
@@ -26,6 +38,11 @@ def get_connection():
         conn.close()
 
 
+def _column_exists(conn, table, column):
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(r["name"] == column for r in rows)
+
+
 def init_db():
     with get_connection() as conn:
         conn.execute("""
@@ -38,11 +55,24 @@ def init_db():
                 unit TEXT NOT NULL DEFAULT 'قطعة'
             )
         """)
+        # جدول طلبات الدليفري
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS delivery_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_phone TEXT,
+            customer_name TEXT,
+            address TEXT,
+            total REAL,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS customers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                phone TEXT NOT NULL
+                phone TEXT NOT NULL,
+                address TEXT
             )
         """)
         conn.execute("""
@@ -56,6 +86,10 @@ def init_db():
                 paid INTEGER NOT NULL DEFAULT 1,
                 paid_at TEXT,
                 created_at TEXT NOT NULL,
+                paid_amount REAL NOT NULL DEFAULT 0,
+                delivery_status TEXT,
+                delivery_address TEXT,
+                delivery_fee REAL DEFAULT 0,
                 FOREIGN KEY (customer_id) REFERENCES customers (id)
             )
         """)
@@ -92,10 +126,46 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sale_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sale_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (sale_id) REFERENCES sales (id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
+        # ---- الترحيلات (Migrations) ----
+        if not _column_exists(conn, "sales", "paid_amount"):
+            conn.execute("ALTER TABLE sales ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0")
+            conn.execute("UPDATE sales SET paid_amount = total WHERE paid = 1")
+
+        if not _column_exists(conn, "customers", "address"):
+            conn.execute("ALTER TABLE customers ADD COLUMN address TEXT")
+
+        if not _column_exists(conn, "sales", "delivery_status"):
+            conn.execute("ALTER TABLE sales ADD COLUMN delivery_status TEXT")
+
+        if not _column_exists(conn, "sales", "delivery_address"):
+            conn.execute("ALTER TABLE sales ADD COLUMN delivery_address TEXT")
+
+        if not _column_exists(conn, "sales", "delivery_fee"):
+            conn.execute("ALTER TABLE sales ADD COLUMN delivery_fee REAL DEFAULT 0")
 
 
 def invoice_serial(sale_id):
     return f"INV-{sale_id:05d}"
+
+
+def _hash(text):
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 # ---------------- Products ----------------
@@ -147,35 +217,162 @@ def adjust_stock(product_id, delta):
         conn.execute("UPDATE products SET stock = stock + ? WHERE id = ?", (delta, product_id))
 
 
-# ---------------- Customers ----------------
-def get_or_create_customer(name, phone):
+def get_product_sold_quantity(product_id):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id FROM customers WHERE name=? AND phone=?", (name, phone)
+            "SELECT COALESCE(SUM(quantity),0) AS q FROM sale_items WHERE product_id=?",
+            (product_id,),
+        ).fetchone()
+        return row["q"]
+
+
+def get_product_returned_quantity(product_id):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(quantity),0) AS q FROM returns WHERE product_id=?",
+            (product_id,),
+        ).fetchone()
+        return row["q"]
+
+
+def get_product_returnable_quantity(product_id):
+    sold = get_product_sold_quantity(product_id)
+    returned = get_product_returned_quantity(product_id)
+    remaining = sold - returned
+    return remaining if remaining > 0 else 0
+
+
+# ---------------- Customers ----------------
+def get_or_create_customer(name, phone, address=None):
+    with get_connection() as conn:      
+        row = conn.execute(
+            "SELECT id FROM customers WHERE phone=? OR name=?", (phone, name)
         ).fetchone()
         if row:
+            if address:
+                conn.execute("UPDATE customers SET address=? WHERE id=?", (address, row["id"]))
             return row["id"]
-        cur = conn.execute("INSERT INTO customers (name, phone) VALUES (?, ?)", (name, phone))
+        cur = conn.execute(
+            "INSERT INTO customers (name, phone, address) VALUES (?, ?, ?)", 
+            (name, phone, address)
+        )
         return cur.lastrowid
 
 
+def find_customer_by_any(search_val):
+    """البحث عن العميل باستخدام رقم التليفون أو الاسم أو العنوان"""
+    search_val = (search_val or "").strip()
+    if not search_val or len(search_val) < 2:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT name, phone, address 
+               FROM customers 
+               WHERE phone LIKE ? OR name LIKE ? OR address LIKE ?
+               ORDER BY id DESC LIMIT 1""",
+            (f"%{search_val}%", f"%{search_val}%", f"%{search_val}%")
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_or_update_customer(name, phone, address=None):
+    """حفظ عميل جديد أو تحديث بياناته إذا كان مقيداً"""
+    # ---------------- Customers ----------------
+# ---------------- Customers ----------------
+def get_or_create_customer(name, phone, address=None):
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM customers WHERE phone=? OR name=?", (phone, name)
+        ).fetchone()
+        if row:
+            if address:
+                conn.execute("UPDATE customers SET address=? WHERE id=?", (address, row["id"]))
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO customers (name, phone, address) VALUES (?, ?, ?)", 
+            (name, phone, address)
+        )
+        return cur.lastrowid
+
+
+def find_customer_by_any(search_val):
+    """البحث عن العميل باستخدام رقم التليفون أو الاسم أو العنوان"""
+    search_val = (search_val or "").strip()
+    if not search_val or len(search_val) < 2:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT name, phone, address 
+                FROM customers 
+                WHERE phone LIKE ? OR name LIKE ? OR address LIKE ?
+                ORDER BY id DESC LIMIT 1""",
+            (f"%{search_val}%", f"%{search_val}%", f"%{search_val}%")
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_or_update_customer(name, phone, address=None):
+    """حفظ عميل جديد أو تحديث بياناته إذا كان مقيداً"""
+    if not phone or not name:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, address FROM customers WHERE phone = ?", (phone,)
+        ).fetchone()
+        
+        if row:
+            new_address = address if address else row["address"]
+            conn.execute(
+                "UPDATE customers SET name = ?, address = ? WHERE phone = ?",
+                (name, new_address, phone)
+            )
+            return row["id"]
+        else:
+            cur = conn.execute(
+                "INSERT INTO customers (name, phone, address) VALUES (?, ?, ?)",
+                (name, phone, address)
+            )
+            return cur.lastrowid
+
+
+def search_customers(query):
+    """البحث عن عدة عملاء بالاسم أو رقم الهاتف أو العنوان لعرضهم في القوائم أو الجداول"""
+    query = (query or "").strip()
+    with get_connection() as conn:
+        if not query:
+            return conn.execute("SELECT * FROM customers ORDER BY name").fetchall()
+        
+        return conn.execute(
+            """SELECT * FROM customers 
+                WHERE name LIKE ? OR phone LIKE ? OR address LIKE ?
+                ORDER BY name""",
+            (f"%{query}%", f"%{query}%", f"%{query}%")
+        ).fetchall()
 # ---------------- Sales ----------------
-def create_sale(cart_items, discount, payment_type, customer_name=None, customer_phone=None):
-    """cart_items: list of {product_id, product_name, quantity, unit, unit_price}"""
+
+
+
+# ---------------- Sales ----------------
+def create_sale(cart_items, discount, payment_type, customer_name=None, customer_phone=None, delivery_address=None, delivery_fee=0.0):
     subtotal = sum(item["quantity"] * item["unit_price"] for item in cart_items)
     discount = min(discount, subtotal)
-    total = subtotal - discount
+    total = subtotal - discount + delivery_fee
     customer_id = None
-    if payment_type == "آجل" and customer_name and customer_phone:
-        customer_id = get_or_create_customer(customer_name, customer_phone)
-    paid = 1 if payment_type == "نقدي" else 0
+    if (payment_type in ["آجل", "دليفري"]) and customer_name and customer_phone:
+        customer_id = get_or_create_customer(customer_name, customer_phone, delivery_address)
+    
+    paid = 1 if payment_type not in ["آجل", "دليفري"] else 0
+    paid_amount = total if paid else 0.0
     now = datetime.now().isoformat(timespec="seconds")
+    
+    delivery_status = "قيد الانتظار" if payment_type == "دليفري" else None
+
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO sales (subtotal, discount, total, payment_type, customer_id, paid, paid_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO sales (subtotal, discount, total, payment_type, customer_id, paid, paid_at, created_at, paid_amount, delivery_status, delivery_address, delivery_fee)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (subtotal, discount, total, payment_type, customer_id, paid,
-             now if paid else None, now),
+             now if paid else None, now, paid_amount, delivery_status, delivery_address, delivery_fee),
         )
         sale_id = cur.lastrowid
         for item in cart_items:
@@ -189,14 +386,17 @@ def create_sale(cart_items, discount, payment_type, customer_name=None, customer
                 "UPDATE products SET stock = stock - ? WHERE id = ?",
                 (item["quantity"], item["product_id"]),
             )
+        if paid_amount > 0:
+            conn.execute(
+                "INSERT INTO sale_payments (sale_id, amount, created_at) VALUES (?, ?, ?)",
+                (sale_id, paid_amount, now),
+            )
     return sale_id, total
 
 
 def get_sale_items(sale_id):
     with get_connection() as conn:
-        return conn.execute(
-            "SELECT * FROM sale_items WHERE sale_id = ?", (sale_id,)
-        ).fetchall()
+        return conn.execute("SELECT * FROM sale_items WHERE sale_id = ?", (sale_id,)).fetchall()
 
 
 def get_sales_for_date(target_date):
@@ -205,7 +405,14 @@ def get_sales_for_date(target_date):
             "SELECT * FROM sales WHERE date(created_at) = ? ORDER BY created_at DESC",
             (target_date,),
         ).fetchall()
-
+def get_delivery_orders_by_phone(phone):
+    """جلب طلبات الدليفري الخاصة بعميل معين برقم الهاتف"""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM delivery_orders WHERE customer_phone = ? ORDER BY id DESC", 
+            (phone,)
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 def get_sales_for_month(year, month):
     prefix = f"{year:04d}-{month:02d}"
@@ -214,18 +421,50 @@ def get_sales_for_month(year, month):
             "SELECT * FROM sales WHERE substr(created_at, 1, 7) = ? ORDER BY created_at DESC",
             (prefix,),
         ).fetchall()
+
+
+def get_year_summary(year):
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT CAST(substr(created_at, 6, 2) AS INTEGER) AS month,
+                      COUNT(*) AS c, COALESCE(SUM(total), 0) AS t
+               FROM sales
+               WHERE substr(created_at, 1, 4) = ?
+               GROUP BY month""",
+            (f"{year:04d}",),
+        ).fetchall()
+        summary = {m: {"count": 0, "total": 0.0} for m in range(1, 13)}
+        for r in rows:
+            summary[r["month"]] = {"count": r["c"], "total": r["t"]}
+        return summary
+
+
 def search_sales(query):
-    """بيدور بتاريخ (YYYY-MM-DD) أو برقم فاتورة/سيريال (زي INV-00007 أو 7 أو 00007)."""
     import re
     query = (query or "").strip()
     if not query:
         return []
     if re.match(r"^\d{4}-\d{2}-\d{2}$", query):
         return get_sales_for_date(query)
+    
     q = query.upper().replace(" ", "")
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM sales ORDER BY created_at DESC").fetchall()
-    return [r for r in rows if q in invoice_serial(r["id"])]
+        rows = conn.execute("""
+            SELECT sales.*, customers.name AS customer_name, customers.phone AS customer_phone
+            FROM sales 
+            LEFT JOIN customers ON sales.customer_id = customers.id
+            ORDER BY sales.created_at DESC
+        """).fetchall()
+    
+    results = []
+    for r in rows:
+        serial = invoice_serial(r["id"]).upper()
+        cust_name = (r["customer_name"] or "").upper()
+        cust_phone = (r["customer_phone"] or "").upper()
+        if q in serial or q in cust_name or q in cust_phone:
+            results.append(r)
+    return results
+
 
 def get_deferred_sales(only_unpaid=True):
     with get_connection() as conn:
@@ -240,16 +479,168 @@ def get_deferred_sales(only_unpaid=True):
         return conn.execute(query).fetchall()
 
 
+def get_sale_payments(sale_id):
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM sale_payments WHERE sale_id = ? ORDER BY created_at DESC", (sale_id,)
+        ).fetchall()
+
+
+def add_payment(sale_id, amount):
+    if amount is None or amount <= 0:
+        raise PaymentValidationError("لازم تدخل مبلغ أكبر من صفر")
+    with get_connection() as conn:
+        sale = conn.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
+        if not sale:
+            raise PaymentValidationError("الفاتورة دي مش موجودة")
+        remaining = sale["total"] - sale["paid_amount"]
+        if amount > remaining + EPSILON:
+            raise PaymentValidationError(
+                f"المبلغ أكبر من المتبقي على العميل ({remaining:.2f} ج.م بس)"
+            )
+        now = datetime.now().isoformat(timespec="seconds")
+        new_paid_amount = min(sale["paid_amount"] + amount, sale["total"])
+        fully_paid = 1 if (sale["total"] - new_paid_amount) <= EPSILON else 0
+        conn.execute(
+            "INSERT INTO sale_payments (sale_id, amount, created_at) VALUES (?, ?, ?)",
+            (sale_id, amount, now),
+        )
+        conn.execute(
+            "UPDATE sales SET paid_amount=?, paid=?, paid_at=? WHERE id=?",
+            (new_paid_amount, fully_paid, now if fully_paid else sale["paid_at"], sale_id),
+        )
+        new_remaining = sale["total"] - new_paid_amount
+        return new_paid_amount, new_remaining, bool(fully_paid)
+
+
 def mark_sale_paid(sale_id):
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE sales SET paid = 1, paid_at = ? WHERE id = ?",
-            (datetime.now().isoformat(timespec="seconds"), sale_id),
-        )
+        sale = conn.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
+    if not sale:
+        return
+    remaining = sale["total"] - sale["paid_amount"]
+    if remaining > EPSILON:
+        add_payment(sale_id, remaining)
+
+
+def add_deferred_payment(sales_id, amount_paid):
+    return add_payment(sales_id, amount_paid)
+
+
+# ---------------- Delivery Management ----------------
+def get_delivery_orders(status_filter="الكل"):
+    with get_connection() as conn:
+        query = """
+            SELECT sales.id, customers.name AS customer_name, customers.phone AS customer_phone, 
+                   sales.total AS total_amount, sales.payment_type, 
+                   COALESCE(sales.delivery_status, 'قيد الانتظار') as delivery_status,
+                   COALESCE(sales.delivery_address, customers.address, 'لم يحدد') as delivery_address,
+                   COALESCE(sales.delivery_fee, 0.0) as delivery_fee,
+                   sales.created_at
+            FROM sales
+            LEFT JOIN customers ON sales.customer_id = customers.id
+            WHERE sales.payment_type = 'دليفري' OR sales.delivery_status IS NOT NULL
+        """
+        if status_filter != "الكل":
+            query += " AND COALESCE(sales.delivery_status, 'قيد الانتظار') = ?"
+            rows = conn.execute(query + " ORDER BY sales.id DESC", (status_filter,)).fetchall()
+        else:
+            rows = conn.execute(query + " ORDER BY sales.id DESC").fetchall()
+
+        orders = []
+        for r in rows:
+            orders.append({
+                "id": r["id"],
+                "customer_name": r["customer_name"] or "عميل عام",
+                "customer_phone": r["customer_phone"] or "لا يوجد",
+                "total_amount": r["total_amount"],
+                "payment_type": r["payment_type"],
+                "status": r["delivery_status"],
+                "address": r["delivery_address"],
+                "delivery_fee": r["delivery_fee"],
+                "created_at": r["created_at"]
+            })
+        return orders
+
+
+def update_delivery_status(sale_id, new_status):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE sales 
+            SET delivery_status = ? 
+            WHERE id = ?
+        """, (new_status, sale_id))
+
+
+def update_delivery_payment_and_status(sale_id, payment_type, total_amount=None, status="تم التسليم"):
+    """تحديث حالة الطلب وطريقة الدفع وتسجيل عملية التحصيل عند التسليم"""
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        sale = conn.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
+        if not sale:
+            return
+
+        amt = total_amount if total_amount is not None else sale["total"]
+
+        if status == "تم التسليم":
+            if payment_type in ["نقدي", "محفظة"]:
+                conn.execute("""
+                    UPDATE sales 
+                    SET delivery_status = ?,
+                        payment_type = ?,
+                        paid = 1,
+                        paid_amount = ?,
+                        paid_at = ?
+                    WHERE id = ?
+                """, (status, payment_type, amt, now, sale_id))
+
+                existing_paid = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) AS t FROM sale_payments WHERE sale_id=?", 
+                    (sale_id,)
+                ).fetchone()["t"]
+
+                diff = amt - existing_paid
+                if diff > EPSILON:
+                    conn.execute(
+                        "INSERT INTO sale_payments (sale_id, amount, created_at) VALUES (?, ?, ?)",
+                        (sale_id, diff, now)
+                    )
+            else:  # آجل
+                conn.execute("""
+                    UPDATE sales 
+                    SET delivery_status = ?,
+                        payment_type = ?
+                    WHERE id = ?
+                """, (status, payment_type, sale_id))
+        else:
+            conn.execute("""
+                UPDATE sales 
+                SET delivery_status = ?,
+                    payment_type = ?
+                WHERE id = ?
+            """, (status, payment_type, sale_id))
 
 
 # ---------------- Returns ----------------
 def add_return(product_id, product_name, quantity, refund_amount, reason):
+    if quantity is None or quantity <= 0:
+        raise ReturnValidationError("لازم تكتب كمية أكبر من صفر")
+
+    if product_id:
+        returnable = get_product_returnable_quantity(product_id)
+        if quantity > returnable + EPSILON:
+            sold = get_product_sold_quantity(product_id)
+            already_returned = get_product_returned_quantity(product_id)
+            if returnable <= 0:
+                raise ReturnValidationError(
+                    f'المرتجع ده مش موجود أصلاً - "{product_name}" مباعش منه كمية كافية لسه '
+                    f'(اتباع {sold:g} واترجع منه {already_returned:g} قبل كده)'
+                )
+            raise ReturnValidationError(
+                f'الكمية أكبر من المتاح للإرجاع - أقصى كمية ممكن ترجعها من "{product_name}" '
+                f'هي {returnable:g} بس (اتباع {sold:g} واترجع منه {already_returned:g} قبل كده)'
+            )
+
     with get_connection() as conn:
         conn.execute(
             """INSERT INTO returns (product_id, product_name, quantity, refund_amount, reason, created_at)
@@ -300,9 +691,9 @@ def get_expenses_for_date(target_date):
 
 
 def apply_recurring_expenses():
-    """بتتأكد إن كل مصروف متكرر (زي الإهلاك) اتسجل مرة في الشهر الحالي، ولو لأ بتسجله تلقائي."""
     today = date.today()
     month_prefix = f"{today.year:04d}-{today.month:02d}"
+    now_iso = datetime.now().isoformat(timespec="seconds")
     with get_connection() as conn:
         templates = conn.execute(
             "SELECT DISTINCT description, category, amount FROM expenses WHERE is_recurring = 1"
@@ -316,7 +707,7 @@ def apply_recurring_expenses():
             if not exists:
                 conn.execute(
                     "INSERT INTO expenses (description, category, amount, is_recurring, created_at) VALUES (?, ?, ?, 1, ?)",
-                    (t["description"], t["category"], t["amount"], today.isoformat()),
+                    (t["description"], t["category"], t["amount"], now_iso),
                 )
 
 
@@ -329,8 +720,14 @@ def get_daily_report(target_date=None):
             "SELECT COALESCE(SUM(total),0) AS t FROM sales WHERE date(created_at)=? AND payment_type='نقدي'",
             (target_date,),
         ).fetchone()["t"]
+        wallet_income = conn.execute(
+            "SELECT COALESCE(SUM(total),0) AS t FROM sales WHERE date(created_at)=? AND payment_type='محفظة'",
+            (target_date,),
+        ).fetchone()["t"]
         deferred_collected = conn.execute(
-            "SELECT COALESCE(SUM(total),0) AS t FROM sales WHERE date(paid_at)=? AND payment_type='آجل'",
+            """SELECT COALESCE(SUM(sp.amount),0) AS t FROM sale_payments sp
+               JOIN sales s ON s.id = sp.sale_id
+               WHERE date(sp.created_at)=? AND s.payment_type='آجل'""",
             (target_date,),
         ).fetchone()["t"]
         deferred_new = conn.execute(
@@ -338,7 +735,7 @@ def get_daily_report(target_date=None):
             (target_date,),
         ).fetchone()["t"]
         deferred_outstanding = conn.execute(
-            "SELECT COALESCE(SUM(total),0) AS t FROM sales WHERE payment_type='آجل' AND paid=0"
+            "SELECT COALESCE(SUM(total - paid_amount),0) AS t FROM sales WHERE payment_type='آجل' AND paid=0"
         ).fetchone()["t"]
         expenses = conn.execute(
             "SELECT COALESCE(SUM(amount),0) AS t FROM expenses WHERE date(created_at)=?",
@@ -350,11 +747,12 @@ def get_daily_report(target_date=None):
         ).fetchone()["c"]
         low_stock = conn.execute("SELECT * FROM products WHERE stock <= 3 ORDER BY stock ASC").fetchall()
 
-    cash_income_total = cash_income + deferred_collected
+    cash_income_total = cash_income + wallet_income + deferred_collected
     net = cash_income_total - expenses - returns_total
     return {
         "date": target_date,
         "cash_income": cash_income,
+        "wallet_income": wallet_income,
         "deferred_collected": deferred_collected,
         "cash_income_total": cash_income_total,
         "deferred_new": deferred_new,
@@ -365,3 +763,319 @@ def get_daily_report(target_date=None):
         "num_sales": num_sales,
         "low_stock": low_stock,
     }
+
+
+# ---------------- Admin / Settings ----------------
+def get_setting(key, default=None):
+    with get_connection() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key, value):
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+
+
+def is_admin_password_set():
+    return get_setting("admin_password_hash") is not None
+
+
+def set_admin_password(password, security_question, security_answer):
+    set_setting("admin_password_hash", _hash(password))
+    set_setting("security_question", security_question)
+    set_setting("security_answer_hash", _hash(security_answer.strip().lower()))
+
+
+def verify_admin_password(password):
+    stored = get_setting("admin_password_hash")
+    return stored is not None and stored == _hash(password)
+
+
+def get_security_question():
+    return get_setting("security_question")
+
+
+def verify_security_answer(answer):
+    stored = get_setting("security_answer_hash")
+    return stored is not None and stored == _hash((answer or "").strip().lower())
+
+
+def reset_admin_password(new_password):
+    set_setting("admin_password_hash", _hash(new_password))
+# ---------------- Delivery Management ----------------
+
+def get_delivery_orders(status_filter="الكل"):
+    """جلب كل طلبات الدليفري من جدول sales"""
+    with get_connection() as conn:
+        query = """
+            SELECT
+                sales.id,
+                customers.name AS customer_name,
+                customers.phone AS customer_phone,
+                sales.total AS total_amount,
+                sales.payment_type,
+                COALESCE(
+                    sales.delivery_status,
+                    'قيد الانتظار'
+                ) AS delivery_status,
+                COALESCE(
+                    sales.delivery_address,
+                    customers.address,
+                    'لم يحدد'
+                ) AS delivery_address,
+                COALESCE(
+                    sales.delivery_fee,
+                    0.0
+                ) AS delivery_fee,
+                sales.created_at
+            FROM sales
+            LEFT JOIN customers
+                ON sales.customer_id = customers.id
+            WHERE
+                sales.payment_type = 'دليفري'
+                OR sales.delivery_status IS NOT NULL
+        """
+
+        params = []
+
+        if status_filter != "الكل":
+            query += """
+                AND COALESCE(
+                    sales.delivery_status,
+                    'قيد الانتظار'
+                ) = ?
+            """
+            params.append(status_filter)
+
+        query += " ORDER BY sales.id DESC"
+
+        rows = conn.execute(query, params).fetchall()
+
+        orders = []
+
+        for r in rows:
+            orders.append({
+                "id": r["id"],
+                "customer_name": r["customer_name"] or "عميل عام",
+                "customer_phone": r["customer_phone"] or "لا يوجد",
+                "total_amount": r["total_amount"] or 0.0,
+                "payment_type": r["payment_type"] or "نقدي",
+                "delivery_status": r["delivery_status"] or "قيد الانتظار",
+                "status": r["delivery_status"] or "قيد الانتظار",
+                "address": r["delivery_address"] or "لم يحدد",
+                "delivery_address": r["delivery_address"] or "لم يحدد",
+                "delivery_fee": r["delivery_fee"] or 0.0,
+                "created_at": r["created_at"] or "",
+            })
+
+        return orders
+
+
+def get_delivery_orders_by_phone(phone=""):
+    """
+    جلب طلبات الدليفري من جدول sales
+    مع البحث برقم الهاتف.
+
+    لو phone فاضي:
+    يرجع كل طلبات الدليفري.
+    """
+
+    phone = (phone or "").strip()
+
+    with get_connection() as conn:
+
+        query = """
+            SELECT
+                sales.id,
+                customers.name AS customer_name,
+                customers.phone AS customer_phone,
+                sales.total AS total_amount,
+                sales.payment_type,
+                COALESCE(
+                    sales.delivery_status,
+                    'قيد الانتظار'
+                ) AS delivery_status,
+                COALESCE(
+                    sales.delivery_address,
+                    customers.address,
+                    'لم يحدد'
+                ) AS delivery_address,
+                COALESCE(
+                    sales.delivery_fee,
+                    0.0
+                ) AS delivery_fee,
+                sales.created_at
+            FROM sales
+            LEFT JOIN customers
+                ON sales.customer_id = customers.id
+            WHERE
+                (
+                    sales.payment_type = 'دليفري'
+                    OR sales.delivery_status IS NOT NULL
+                )
+        """
+
+        params = []
+
+        # البحث برقم الهاتف فقط لو المستخدم كتب رقم
+        if phone:
+            query += """
+                AND customers.phone LIKE ?
+            """
+            params.append(f"%{phone}%")
+
+        query += """
+            ORDER BY sales.id DESC
+        """
+
+        rows = conn.execute(query, params).fetchall()
+
+        orders = []
+
+        for r in rows:
+            orders.append({
+                "id": r["id"],
+                "customer_name": r["customer_name"] or "عميل عام",
+                "customer_phone": r["customer_phone"] or "لا يوجد",
+                "total_amount": r["total_amount"] or 0.0,
+                "payment_type": r["payment_type"] or "نقدي",
+                "delivery_status": r["delivery_status"] or "قيد الانتظار",
+                "status": r["delivery_status"] or "قيد الانتظار",
+                "address": r["delivery_address"] or "لم يحدد",
+                "delivery_address": r["delivery_address"] or "لم يحدد",
+                "delivery_fee": r["delivery_fee"] or 0.0,
+                "created_at": r["created_at"] or "",
+            })
+
+        return orders
+
+
+def update_delivery_status(sale_id, new_status):
+    """تحديث حالة طلب الدليفري"""
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE sales
+            SET delivery_status = ?
+            WHERE id = ?
+            """,
+            (new_status, sale_id),
+        )
+
+
+def update_delivery_payment_and_status(
+    sale_id,
+    payment_type,
+    total_amount=None,
+    status="تم التسليم"
+):
+    """
+    تحديث حالة طلب الدليفري وطريقة الدفع.
+    عند التسليم نقدي/محفظة يتم تسجيل المبلغ كمتحصل.
+    """
+
+    now = datetime.now().isoformat(timespec="seconds")
+
+    with get_connection() as conn:
+
+        sale = conn.execute(
+            "SELECT * FROM sales WHERE id = ?",
+            (sale_id,)
+        ).fetchone()
+
+        if not sale:
+            return
+
+        amt = (
+            total_amount
+            if total_amount is not None
+            else sale["total"]
+        )
+
+        if status == "تم التسليم":
+
+            if payment_type in ["نقدي", "محفظة"]:
+
+                conn.execute(
+                    """
+                    UPDATE sales
+                    SET
+                        delivery_status = ?,
+                        payment_type = ?,
+                        paid = 1,
+                        paid_amount = ?,
+                        paid_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        status,
+                        payment_type,
+                        amt,
+                        now,
+                        sale_id,
+                    ),
+                )
+
+                existing_paid = conn.execute(
+                    """
+                    SELECT COALESCE(SUM(amount), 0) AS t
+                    FROM sale_payments
+                    WHERE sale_id = ?
+                    """,
+                    (sale_id,),
+                ).fetchone()["t"]
+
+                diff = amt - existing_paid
+
+                if diff > EPSILON:
+                    conn.execute(
+                        """
+                        INSERT INTO sale_payments
+                        (sale_id, amount, created_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            sale_id,
+                            diff,
+                            now,
+                        ),
+                    )
+
+            else:
+                # آجل
+                conn.execute(
+                    """
+                    UPDATE sales
+                    SET
+                        delivery_status = ?,
+                        payment_type = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        status,
+                        payment_type,
+                        sale_id,
+                    ),
+                )
+
+        else:
+
+            conn.execute(
+                """
+                UPDATE sales
+                SET
+                    delivery_status = ?,
+                    payment_type = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    payment_type,
+                    sale_id,
+                ),
+            )
