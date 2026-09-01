@@ -40,7 +40,8 @@ def get_connection():
 
 def _column_exists(conn, table, column):
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(r["name"] == column for r in rows)
+    # r[1] يحتوي دائماً على اسم العمود سواء مع row_factory أو بدونه
+    return any(r[1] == column for r in rows)
 
 
 def init_db():
@@ -71,6 +72,8 @@ def init_db():
                 total REAL NOT NULL,
                 payment_type TEXT NOT NULL DEFAULT 'نقدي',
                 customer_id INTEGER,
+                customer_name TEXT,
+                customer_phone TEXT,
                 paid INTEGER NOT NULL DEFAULT 1,
                 paid_at TEXT,
                 created_at TEXT NOT NULL,
@@ -78,6 +81,7 @@ def init_db():
                 delivery_status TEXT,
                 delivery_address TEXT,
                 delivery_fee REAL DEFAULT 0,
+                is_delivery INTEGER DEFAULT 0,
                 FOREIGN KEY (customer_id) REFERENCES customers (id)
             )
         """)
@@ -130,28 +134,7 @@ def init_db():
             )
         """)
 
-        # ---- الترحيلات (Migrations) ----
-      # ---- الترحيلات (Migrations) ----
-        if not _column_exists(conn, "sales", "paid_amount"):
-            conn.execute("ALTER TABLE sales ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0")
-            conn.execute("UPDATE sales SET paid_amount = total WHERE paid = 1")
-
-        if not _column_exists(conn, "customers", "address"):
-            conn.execute("ALTER TABLE customers ADD COLUMN address TEXT")
-
-        if not _column_exists(conn, "sales", "delivery_status"):
-            conn.execute("ALTER TABLE sales ADD COLUMN delivery_status TEXT")
-
-        if not _column_exists(conn, "sales", "delivery_address"):
-            conn.execute("ALTER TABLE sales ADD COLUMN delivery_address TEXT")
-
-        if not _column_exists(conn, "sales", "delivery_fee"):
-            conn.execute("ALTER TABLE sales ADD COLUMN delivery_fee REAL DEFAULT 0")
-
-        # أضف هذا السطر هنا لتفادي خطأ no such column: sales.is_delivery
-        if not _column_exists(conn, "sales", "is_delivery"):
-            conn.execute("ALTER TABLE sales ADD COLUMN is_delivery INTEGER DEFAULT 0")
-        # ---- الترحيلات (Migrations) ----
+        # ---- الترحيلات (Migrations) لقواعد البيانات القديمة ----
         if not _column_exists(conn, "sales", "paid_amount"):
             conn.execute("ALTER TABLE sales ADD COLUMN paid_amount REAL NOT NULL DEFAULT 0")
             conn.execute("UPDATE sales SET paid_amount = total WHERE paid = 1")
@@ -170,15 +153,22 @@ def init_db():
 
         if not _column_exists(conn, "sales", "is_delivery"):
             conn.execute("ALTER TABLE sales ADD COLUMN is_delivery INTEGER DEFAULT 0")
+
         if not _column_exists(conn, "sales", "customer_name"):
             conn.execute("ALTER TABLE sales ADD COLUMN customer_name TEXT")
 
         if not _column_exists(conn, "sales", "customer_phone"):
             conn.execute("ALTER TABLE sales ADD COLUMN customer_phone TEXT")
-        # ضع السطر هنا لتحديث الطلبات القديمة وجعلها تظهر فوراً
-        conn.execute("UPDATE sales SET is_delivery = 1 WHERE delivery_status IS NOT NULL OR delivery_fee > 0 OR delivery_address IS NOT NULL;")
+        if not _column_exists(conn, "products", "unit"):
+            conn.execute("ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT 'قطعة'")
+        # تحديث المبيعات القديمة لتحديد حالات التوصيل
+        conn.execute("""
+            UPDATE sales 
+            SET is_delivery = 1 
+            WHERE delivery_status IS NOT NULL OR delivery_fee > 0 OR delivery_address IS NOT NULL
+        """)
+        
         conn.commit()
-
 
 def invoice_serial(sale_id):
     return f"INV-{sale_id:05d}"
@@ -890,34 +880,7 @@ def update_delivery_payment_and_status(sale_id, payment_type, total_amount=None,
                 (status, payment_type, sale_id),
             )
 def clear_all_customers():
-    """مسح بيانات العملاء وعناوينهم وأرقامهم من كافة الجداول"""
     with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA foreign_keys = OFF;")
-        
-        # 1. مسح جدول العملاء
-        cursor.execute("DELETE FROM customers;")
-        
-        # 2. تفريغ بيانات العملاء والعناوين من جدول المبيعات القديمة
-        try:
-            cursor.execute("""
-                UPDATE sales 
-                SET customer_name = NULL, 
-                    customer_phone = NULL, 
-                    customer_address = NULL;
-            """)
-        except Exception as e:
-            print(f"Sales update info: {e}")
-
-        # إعادة تعيين الترقيم
-        try:
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name='customers';")
-        except Exception:
-            pass
-            
-        cursor.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("UPDATE sales SET customer_id = NULL, delivery_address = NULL")
+        conn.execute("DELETE FROM customers")
         conn.commit()
-    print("تم مسح كافة سجلات وأرقام العملاء بنجاح!")
-
-# تشغيل الدالة
-# clear_all_customers()

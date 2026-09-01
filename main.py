@@ -18,8 +18,8 @@ ICON_PATH = os.path.join(BASE_DIR, "assets", "icon.png")
 PAGES = [
     ("بيع", ft.Icons.POINT_OF_SALE, SalesView, False),
     ("طلبات الدليفري", ft.Icons.LOCAL_SHIPPING, DeliveryView, False),
-    ("المنتجات", ft.Icons.INVENTORY_2, ProductsView, True),
     ("المصروفات", ft.Icons.ACCOUNT_BALANCE_WALLET, ExpensesView, False),
+    ("المنتجات", ft.Icons.INVENTORY_2, ProductsView, True),
     ("الإيرادات المؤجلة", ft.Icons.SCHEDULE_SEND, DeferredView, True),
     ("المرتجعات", ft.Icons.UNDO, ReturnsView, True),
     ("جدول الشهر", ft.Icons.TABLE_CHART, MonthlyView, True),
