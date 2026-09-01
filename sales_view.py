@@ -1,19 +1,36 @@
 """
 شاشة البيع - Aleefy Pets
-تصميم مدمج وأنيق لكروت المنتجات مناسب للشاشات المختلفة
+تصميم مدمج وأنيق لكروت المنتجات وطباعة حرارية مباشرة عبر OTG USB
 """
 import flet as ft
 import db
 from datetime import datetime
 import os
 import tempfile
-from fpdf import FPDF
+import re
 import arabic_reshaper
 from bidi.algorithm import get_display
+from PIL import Image, ImageDraw, ImageFont
+
+# مكتبة الطابعة الحرارية
+try:
+    from escpos.printer import Usb
+    HAS_ESCPOS = True
+except ImportError:
+    HAS_ESCPOS = False
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "amiri-regular.ttf")
+
+# ------------------------------------------------------------------
+# بيانات المحل اللي هتظهر فوق كل فاتورة مطبوعة
+# ------------------------------------------------------------------
+SHOP_NAME = "Aleefy Pets"
+SHOP_NAME_AR = "أليفي بيتس لرعاية الحيوانات"
+SHOP_ADDRESS = "سيتي بارك مول - قطاع د - زهراء أكتوبر"
+SHOP_WHATSAPP = "01129062463"
+SHOP_PHONES = ["01001422096", "01157440596"]
 
 
 def get_logo_path():
@@ -30,48 +47,242 @@ def ar(text):
     return get_display(reshaped_text)
 
 
-def print_invoice_pdf(page, inv_number, date_str, items, discount, total, payment_type):
-    try:
-        pdf = FPDF(format=(80, 160))
-        pdf.add_page()
-        logo_path = get_logo_path()
+def parse_stored_address(address_str):
+    """
+    تفكيك نص العنوان المدمج وتوزيعه على الحقول الثلاثة
+    (القطاع/المنطقة، رقم العمارة، الشقة/الدور)
+    """
+    if not address_str:
+        return "", "", ""
 
-        if logo_path:
-            pdf.image(logo_path, x=20, y=5, w=40)
-            pdf.ln(25)
+    sector = ""
+    building = ""
+    apartment = ""
 
-        if os.path.exists(FONT_PATH):
-            pdf.add_font("Amiri", "", FONT_PATH)
-            pdf.set_font("Amiri", size=10)
+    # إذا كان العنوان مكتوباً بالتنسيق المنسق (يحتوي على علامة -)
+    parts = [p.strip() for p in address_str.split("-") if p.strip()]
+
+    for part in parts:
+        # استخراج القطاع / المنطقة
+        if "القطاع" in part or "المنطقة" in part:
+            sector = re.sub(r'^(القطاع/المنطقة|القطاع|المنطقة)\s*[:/]?\s*', '', part).strip()
+        # استخراج رقم العمارة
+        elif "عمارة" in part:
+            building = re.sub(r'^عمارة\s*[:/]?\s*', '', part).strip()
+        # استخراج رقم الشقة
+        elif "شقة" in part:
+            apartment = re.sub(r'^شقة\s*[:/]?\s*', '', part).strip()
+
+    # إذا لم يستطع التفكيك القائم على الكلمات المفتاحية، يوضع النص كاملاً في خانة القطاع/المنطقة
+    if not sector and not building and not apartment:
+        sector = address_str.strip()
+
+    return sector, building, apartment
+
+
+def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
+    """
+    توليد صورة أنيقة عالية الجودة للفاتورة الحرارية (80mm) جاهزة للطباعة المباشرة.
+    """
+    width = 576  # العرض بالبكسل لطابعة 80 مم (203 DPI)
+    padding = 20
+    
+    # ------------------ تحميل الخطوط بشكل مضمون ------------------
+    font_regular = None
+    font_bold = None
+    font_title = None
+
+    font_sources = [
+        FONT_PATH,
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\tahoma.ttf",
+        "C:\\Windows\\Fonts\\seguiemj.ttf"
+    ]
+
+    for font_p in font_sources:
+        if font_p and os.path.exists(font_p):
+            try:
+                font_regular = ImageFont.truetype(font_p, 22)
+                font_bold = ImageFont.truetype(font_p, 26)
+                font_title = ImageFont.truetype(font_p, 34)
+                break
+            except Exception:
+                continue
+
+    if not font_regular:
+        font_regular = font_bold = font_title = ImageFont.load_default()
+
+    img_temp = Image.new("RGB", (width, 2500), "white")
+    draw = ImageDraw.Draw(img_temp)
+    
+    y = 20
+
+    def draw_text(text, font, align="center", fill="black"):
+        nonlocal y
+        text_ar = ar(text)
+        bbox = draw.textbbox((0, 0), text_ar, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        
+        if align == "center":
+            x = (width - w) // 2
+        elif align == "right":
+            x = width - padding - w
         else:
-            pdf.set_font("Arial", size=10)
+            x = padding
 
-        pdf.cell(60, 6, txt="Aleefy Pets", ln=True, align="C")
-        pdf.cell(60, 5, txt=ar("أليفي بيتس لرعاية الحيوانات"), ln=True, align="C")
-        pdf.cell(60, 5, txt="--------------------------------", ln=True, align="C")
-        pdf.cell(60, 5, txt=ar(f"رقم الفاتورة: {inv_number}"), ln=True, align="R")
-        pdf.cell(60, 5, txt=ar(f"التاريخ: {date_str}"), ln=True, align="R")
-        pdf.cell(60, 5, txt=ar(f"طريقة الدفع: {payment_type}"), ln=True, align="R")
-        pdf.cell(60, 5, txt="--------------------------------", ln=True, align="C")
+        draw.text((x, y), text_ar, fill=fill, font=font)
+        y += h + 14
 
-        for item in items:
-            name = item.get("product_name") or item.get("name", "")
-            qty = item.get("quantity") or item.get("qty", 1)
-            price = item.get("unit_price") or item.get("price", 0.0)
-            unit_str = "كجم" if item.get("unit") == "كيلو" else "قطعة"
+    def draw_line(dash=False):
+        nonlocal y
+        if dash:
+            for x in range(padding, width - padding, 12):
+                draw.line([(x, y), (x + 6, y)], fill="black", width=2)
+        else:
+            draw.line([(padding, y), (width - padding, y)], fill="black", width=2)
+        y += 15
 
-            line = f"{name} x{qty:g} {unit_str} - {qty * price:.2f}"
-            pdf.cell(60, 5, txt=ar(line), ln=True, align="R")
+    # ------------------ الشعار والهيدر ------------------
+    logo_path = get_logo_path()
+    if logo_path:
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((160, 160))
+            logo_x = (width - logo.width) // 2
+            img_temp.paste(logo, (logo_x, y), logo)
+            y += logo.height + 15
+        except Exception as e:
+            print(f"خطأ في إضافة اللوجو: {e}")
 
-        pdf.cell(60, 5, txt="--------------------------------", ln=True, align="C")
-        pdf.cell(60, 5, txt=ar(f"الخصم: {discount:.2f} ج.م"), ln=True, align="R")
-        pdf.cell(60, 6, txt=ar(f"الإجمالي: {total:.2f} ج.م"), ln=True, align="R")
+    draw_text(SHOP_NAME, font_title, align="center")
+    draw_text(SHOP_NAME_AR, font_bold, align="center")
+    draw_text(SHOP_ADDRESS, font_regular, align="center")
+    draw_text(f"واتساب: {SHOP_WHATSAPP}", font_regular, align="center")
+    draw_text("مكالمات: " + " - ".join(SHOP_PHONES), font_regular, align="center")
+    
+    draw_line()
 
-        temp_path = os.path.join(tempfile.gettempdir(), f"invoice_{inv_number}.pdf")
-        pdf.output(temp_path)
-        page.launch_url(f"file://{temp_path}")
+    # ------------------ بيانات الفاتورة ------------------
+    draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right")
+    draw_text(f"التاريخ: {date_str}", font_regular, align="right")
+    draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right")
+    
+    if is_delivery:
+        draw_text("نوع الطلب: دليفري", font_regular, align="right")
+        if customer_name:
+            draw_text(f"العميل: {customer_name}", font_regular, align="right")
+        if customer_phone:
+            draw_text(f"التليفون: {customer_phone}", font_regular, align="right")
+        if customer_address:
+            draw_text(f"العنوان: {customer_address}", font_bold, align="right")
+    else:
+        draw_text("نوع الطلب: استلام من الفرع", font_regular, align="right")
+    
+    draw_line(dash=True)
+
+    # ------------------ الأصناف ------------------
+    for item in items:
+        name = item.get("product_name") or item.get("name", "")
+        qty = item.get("quantity") or item.get("qty", 1)
+        price = item.get("unit_price") or item.get("price", 0.0)
+        unit_str = "كجم" if item.get("unit") == "كيلو" else "قطعة"
+        line_total = qty * price
+
+        draw_text(name, font_bold, align="right")
+        
+        detail_txt = f"{qty:g} {unit_str} x {price:.2f}"
+        amount_txt = f"{line_total:.2f} ج.م"
+        
+        draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
+        bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
+        draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
+        y += 35
+
+    draw_line(dash=True)
+
+    # ------------------ الإجماليات ------------------
+    def draw_total_row(label, value, is_bold=False):
+        nonlocal y
+        f = font_bold if is_bold else font_regular
+        val_str = f"{value:.2f} ج.م"
+        draw.text((padding, y), ar(val_str), fill="black", font=f)
+        
+        bbox = draw.textbbox((0, 0), ar(label), font=f)
+        draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(label), fill="black", font=f)
+        y += 40
+
+    subtotal = sum((it.get("quantity") or it.get("qty", 1)) * (it.get("unit_price") or it.get("price", 0.0)) for it in items)
+    draw_total_row("الإجمالي الفرعي", subtotal)
+    
+    if discount:
+        draw_total_row("الخصم", -discount)
+    if delivery_fee:
+        draw_total_row("رسوم التوصيل", delivery_fee)
+
+    draw_line()
+    draw_total_row("الإجمالي النهائي", total, is_bold=True)
+    draw_line()
+
+    # ------------------ الفوتر ------------------
+    draw_text("شكرا لتعاملكم معنا", font_bold, align="center")
+    draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center")
+    y += 20
+
+    final_img = img_temp.crop((0, 0, width, y))
+    
+    temp_img_path = os.path.join(tempfile.gettempdir(), f"invoice_{inv_number}.png")
+    final_img.save(temp_img_path)
+    return temp_img_path, final_img
+
+
+def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
+    try:
+        img_path, pil_image = generate_invoice_image(
+            inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
+        )
+
+        printed_via_usb = False
+
+        if HAS_ESCPOS:
+            common_printers = [
+                (0x0416, 0x5011),
+                (0x0fe6, 0x811e),
+                (0x04b8, 0x0202),
+            ]
+
+            for v_id, p_id in common_printers:
+                try:
+                    printer = Usb(v_id, p_id, timeout=0, in_ep=0x81, out_ep=0x02)
+                    printer.image(pil_image)
+                    printer.cut()
+                    printed_via_usb = True
+                    
+                    snack = ft.SnackBar(ft.Text("تمت الطباعة بنجاح عبر USB! 🖨️"), bgcolor=ft.Colors.GREEN_700)
+                    page.overlay.append(snack)
+                    snack.open = True
+                    page.update()
+                    break
+                except Exception:
+                    continue
+
+        if not printed_via_usb:
+            try:
+                if os.name == 'nt':
+                    os.startfile(img_path)
+            except Exception:
+                pass
+
+            snack = ft.SnackBar(
+                ft.Text("تمت معاينة الفاتورة بنجاح 🖼️"), 
+                bgcolor=ft.Colors.BLUE_700
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+
     except Exception as ex:
-        print(f"خطأ أثناء إنشاء الفاتورة: {ex}")
+        print(f"خطأ أثناء معاينة/طباعة الفاتورة: {ex}")
 
 
 CATEGORY_ICONS = {
@@ -113,11 +324,10 @@ def SalesView(page: ft.Page):
 
     chips_row = ft.Row(spacing=8, scroll=ft.ScrollMode.AUTO)
 
-    # شبكة بمقاسات مدمجة ومضبوطة للكروت
     products_grid = ft.GridView(
         expand=True,
-        max_extent=135,          # مقاس متناسق يعرض كروت ملمومة وأنيقة
-        child_aspect_ratio=0.85, # نسبة العرض للارتفاع لعدم التثقيل في الطول
+        max_extent=135,
+        child_aspect_ratio=0.85,
         spacing=10,
         run_spacing=10,
     )
@@ -136,6 +346,24 @@ def SalesView(page: ft.Page):
         color=ft.Colors.BLACK,
         border_color=ft.Colors.ORANGE_400,
         focused_border_color=ft.Colors.ORANGE_600,
+        height=42,
+        content_padding=10,
+        on_change=lambda e: update_totals_only(),
+    )
+
+    delivery_fee_field = ft.TextField(
+        hint_text="رسوم التوصيل (ج.م)",
+        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
+        value="0",
+        rtl=True,
+        visible=False,
+        keyboard_type=ft.KeyboardType.NUMBER,
+        width=160,
+        border_radius=10,
+        bgcolor=ft.Colors.WHITE,
+        color=ft.Colors.BLACK,
+        border_color=ft.Colors.GREEN_400,
+        focused_border_color=ft.Colors.GREEN_600,
         height=42,
         content_padding=10,
         on_change=lambda e: update_totals_only(),
@@ -218,8 +446,36 @@ def SalesView(page: ft.Page):
         expand=True,
     )
 
-    customer_address_field = ft.TextField(
-        hint_text="عنوان التوصيل بالتفصيل",
+    customer_sector_field = ft.TextField(
+        hint_text="القطاع / المنطقة",
+        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
+        rtl=True,
+        visible=False,
+        border_radius=10,
+        bgcolor=ft.Colors.WHITE,
+        color=ft.Colors.BLACK,
+        border_color=ft.Colors.ORANGE_400,
+        height=42,
+        content_padding=10,
+        expand=True,
+    )
+
+    customer_building_field = ft.TextField(
+        hint_text="رقم العمارة",
+        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
+        rtl=True,
+        visible=False,
+        border_radius=10,
+        bgcolor=ft.Colors.WHITE,
+        color=ft.Colors.BLACK,
+        border_color=ft.Colors.ORANGE_400,
+        height=42,
+        content_padding=10,
+        expand=True,
+    )
+
+    customer_apartment_field = ft.TextField(
+        hint_text="الشقة / الدور",
         hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
         rtl=True,
         visible=False,
@@ -304,18 +560,29 @@ def SalesView(page: ft.Page):
     def select_customer(name, phone, address):
         customer_name_field.value = name if name else ""
         customer_phone_field.value = phone if phone else ""
-        customer_address_field.value = address if address else ""
+
+        # تفكيك العنوان المخزن وتعبئة الحقول المخصصة
+        sector, building, apartment = parse_stored_address(address)
+        customer_sector_field.value = sector
+        customer_building_field.value = building
+        customer_apartment_field.value = apartment
 
         customer_name_field.visible = True
         customer_phone_field.visible = True
-        customer_address_field.visible = True
+        
+        show_addr = is_delivery_switch.value
+        customer_sector_field.visible = show_addr
+        customer_building_field.visible = show_addr
+        customer_apartment_field.visible = show_addr
 
         suggestions_container.visible = False
         suggestions_list.controls.clear()
 
         customer_name_field.update()
         customer_phone_field.update()
-        customer_address_field.update()
+        customer_sector_field.update()
+        customer_building_field.update()
+        customer_apartment_field.update()
         suggestions_container.update()
         suggestions_list.update()
 
@@ -439,6 +706,14 @@ def SalesView(page: ft.Page):
         else:
             refresh_cart()
 
+    def get_delivery_fee_value():
+        if not is_delivery_switch.value:
+            return 0.0
+        try:
+            return float(delivery_fee_field.value) if delivery_fee_field.value else 0.0
+        except ValueError:
+            return 0.0
+
     def update_totals_only():
         subtotal = sum(item["price"] * item["qty"] for item in cart.values())
         try:
@@ -446,11 +721,17 @@ def SalesView(page: ft.Page):
         except ValueError:
             discount = 0.0
         discount = max(0.0, min(discount, subtotal))
-        total = subtotal - discount
 
-        subtotal_text.value = f"الإجمالي الفرعي: {subtotal:.2f} ج.م" + (
-            f"   |   الخصم: {discount:.2f} ج.م" if discount else ""
-        )
+        fee = get_delivery_fee_value()
+        total = subtotal - discount + fee
+
+        subtotal_line = f"الإجمالي الفرعي: {subtotal:.2f} ج.م"
+        if discount:
+            subtotal_line += f"   |   الخصم: {discount:.2f} ج.م"
+        if fee:
+            subtotal_line += f"   |   التوصيل: {fee:.2f} ج.م"
+        subtotal_text.value = subtotal_line
+
         total_text.value = f"الإجمالي: {total:.2f} ج.م"
         checkout_btn.disabled = len(cart) == 0
         page.update()
@@ -585,10 +866,18 @@ def SalesView(page: ft.Page):
         needs_customer = (payment_type_radio.value == "آجل") or is_delivery_switch.value
         customer_name_field.visible = needs_customer
         customer_phone_field.visible = needs_customer
-        customer_address_field.visible = is_delivery_switch.value
+        
+        show_addr = is_delivery_switch.value
+        customer_sector_field.visible = show_addr
+        customer_building_field.visible = show_addr
+        customer_apartment_field.visible = show_addr
+        delivery_fee_field.visible = show_addr
+
+        if not is_delivery_switch.value:
+            delivery_fee_field.value = "0"
         if not needs_customer:
             suggestions_container.visible = False
-        page.update()
+        update_totals_only()
 
     def checkout(e):
         status_text.value = ""
@@ -606,23 +895,35 @@ def SalesView(page: ft.Page):
                 )
                 page.update()
                 return
-            if is_delivery and not customer_address_field.value:
-                status_text.value = "طلب الدليفري يتطلب إدخال العنوان"
+            if is_delivery and (not customer_sector_field.value or not customer_building_field.value):
+                status_text.value = "طلب الدليفري يتطلب إدخال المنطقة/القطاع ورقم العمارة على الأقل"
                 page.update()
                 return
+
+            address_parts = []
+            if customer_sector_field.value and customer_sector_field.value.strip():
+                address_parts.append(f"القطاع/المنطقة: {customer_sector_field.value.strip()}")
+            if customer_building_field.value and customer_building_field.value.strip():
+                address_parts.append(f"عمارة: {customer_building_field.value.strip()}")
+            if customer_apartment_field.value and customer_apartment_field.value.strip():
+                address_parts.append(f"شقة: {customer_apartment_field.value.strip()}")
+
+            full_address = " - ".join(address_parts) if address_parts else None
 
             db.save_or_update_customer(
                 customer_name_field.value.strip(),
                 customer_phone_field.value.strip(),
-                customer_address_field.value.strip()
-                if customer_address_field.value
-                else None,
+                full_address,
             )
+        else:
+            full_address = None
 
         try:
             discount = float(discount_field.value) if discount_field.value else 0.0
         except ValueError:
             discount = 0.0
+
+        delivery_fee = get_delivery_fee_value()
 
         items = [
             {
@@ -637,7 +938,6 @@ def SalesView(page: ft.Page):
 
         c_name = customer_name_field.value.strip() if needs_customer else None
         c_phone = customer_phone_field.value.strip() if needs_customer else None
-        c_addr = customer_address_field.value.strip() if is_delivery else None
 
         sale_id, total = db.create_sale(
             cart_items=items,
@@ -645,24 +945,28 @@ def SalesView(page: ft.Page):
             payment_type=payment_type,
             customer_name=c_name,
             customer_phone=c_phone,
-            delivery_address=c_addr,
+            delivery_address=full_address,
+            delivery_fee=delivery_fee,
         )
 
-        show_invoice(sale_id, items, discount, total, payment_type, is_delivery)
+        show_invoice(sale_id, items, discount, delivery_fee, total, payment_type, is_delivery, c_name, c_phone, full_address)
 
         cart.clear()
         discount_field.value = "0"
+        delivery_fee_field.value = "0"
         payment_type_radio.value = "نقدي"
         is_delivery_switch.value = False
         customer_name_field.value = ""
         customer_phone_field.value = ""
-        customer_address_field.value = ""
+        customer_sector_field.value = ""
+        customer_building_field.value = ""
+        customer_apartment_field.value = ""
         suggestions_container.visible = False
         toggle_customer_fields()
         refresh_grid()
         refresh_cart()
 
-    def show_invoice(sale_id, items, discount, total, payment_type, is_delivery):
+    def show_invoice(sale_id, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
         serial = db.invoice_serial(sale_id)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         rows = [
@@ -684,6 +988,66 @@ def SalesView(page: ft.Page):
             ])
             for it in items
         ]
+
+        totals_rows = [
+            ft.Row([
+                ft.Text("الخصم", color=ft.Colors.GREY_700),
+                ft.Text(f"{discount:.2f} ج.م", color=ft.Colors.BLACK),
+            ]),
+        ]
+        if delivery_fee:
+            totals_rows.append(
+                ft.Row([
+                    ft.Text("رسوم التوصيل", color=ft.Colors.GREY_700),
+                    ft.Text(f"{delivery_fee:.2f} ج.م", color=ft.Colors.BLACK),
+                ])
+            )
+
+        invoice_info_controls = [
+            ft.Row([
+                ft.Text("رقم الفاتورة", color=ft.Colors.GREY_700),
+                ft.Text(
+                    serial, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK
+                ),
+            ]),
+            ft.Row([
+                ft.Text("التاريخ والوقت", color=ft.Colors.GREY_700),
+                ft.Text(now_str, color=ft.Colors.BLACK),
+            ]),
+            ft.Row([
+                ft.Text("طريقة الدفع", color=ft.Colors.GREY_700),
+                ft.Text(
+                    payment_type,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.BLUE_700,
+                ),
+            ]),
+            ft.Row([
+                ft.Text("نوع الطلب", color=ft.Colors.GREY_700),
+                ft.Text(
+                    "دليفري 🛵" if is_delivery else "استلام من الفرع",
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.ORANGE_700,
+                ),
+            ]),
+        ]
+
+        if is_delivery and customer_address:
+            invoice_info_controls.extend([
+                ft.Row([
+                    ft.Text("اسم العميل", color=ft.Colors.GREY_700),
+                    ft.Text(customer_name or "-", weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
+                ]),
+                ft.Row([
+                    ft.Text("رقم التليفون", color=ft.Colors.GREY_700),
+                    ft.Text(customer_phone or "-", color=ft.Colors.BLACK),
+                ]),
+                ft.Row([
+                    ft.Text("عنوان التوصيل", color=ft.Colors.GREY_700),
+                    ft.Text(customer_address, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
+                ]),
+            ])
+
         invoice_view.controls = [
             ft.Row([
                 ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_400, size=30),
@@ -705,38 +1069,21 @@ def SalesView(page: ft.Page):
                 ),
                 content=ft.Column([
                     ft.Row([
-                        ft.Text("رقم الفاتورة", color=ft.Colors.GREY_700),
-                        ft.Text(
-                            serial, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK
-                        ),
-                    ]),
-                    ft.Row([
-                        ft.Text("التاريخ والوقت", color=ft.Colors.GREY_700),
-                        ft.Text(now_str, color=ft.Colors.BLACK),
-                    ]),
-                    ft.Row([
-                        ft.Text("طريقة الدفع", color=ft.Colors.GREY_700),
-                        ft.Text(
-                            payment_type,
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.BLUE_700,
-                        ),
-                    ]),
-                    ft.Row([
-                        ft.Text("نوع الطلب", color=ft.Colors.GREY_700),
-                        ft.Text(
-                            "دليفري 🛵" if is_delivery else "استلام من الفرع",
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.ORANGE_700,
-                        ),
-                    ]),
+                        ft.Image(src=logo_path, height=40, fit=ft.BoxFit.CONTAIN)
+                        if logo_path else ft.Icon(ft.Icons.PETS, color=ft.Colors.ORANGE_700, size=30),
+                        ft.Column([
+                            ft.Text(SHOP_NAME, weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLACK),
+                            ft.Text(SHOP_ADDRESS, size=10, color=ft.Colors.GREY_700),
+                            ft.Text(f"واتساب: {SHOP_WHATSAPP}", size=10, color=ft.Colors.GREY_700),
+                            ft.Text(f"مكالمات: {' - '.join(SHOP_PHONES)}", size=10, color=ft.Colors.GREY_700),
+                        ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END),
+                    ], alignment=ft.MainAxisAlignment.END, spacing=10),
+                    ft.Divider(),
+                    *invoice_info_controls,
                     ft.Divider(),
                     *rows,
                     ft.Divider(),
-                    ft.Row([
-                        ft.Text("الخصم", color=ft.Colors.GREY_700),
-                        ft.Text(f"{discount:.2f} ج.م", color=ft.Colors.BLACK),
-                    ]),
+                    *totals_rows,
                     ft.Row([
                         ft.Text(
                             "الإجمالي",
@@ -765,8 +1112,8 @@ def SalesView(page: ft.Page):
                             padding=15,
                             shape=ft.RoundedRectangleBorder(radius=10),
                         ),
-                        on_click=lambda e: print_invoice_pdf(
-                            page, serial, now_str, items, discount, total, payment_type
+                        on_click=lambda e: print_invoice_otg(
+                            page, serial, now_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
                         ),
                     ),
                     ft.ElevatedButton(
@@ -835,7 +1182,6 @@ def SalesView(page: ft.Page):
         header_bar,
         search_field,
         chips_row,
-        # ارتفاع متناسق لعرض 2 صفوف كاملة بنقاء ودون قص للكروت
         ft.Container(
             content=products_grid,
             height=320,
@@ -843,7 +1189,7 @@ def SalesView(page: ft.Page):
         ft.Divider(color=ft.Colors.WHITE24),
         ft.Text("السلة 🛒", weight=ft.FontWeight.BOLD, size=15, color=ft.Colors.WHITE),
         cart_list,
-        ft.Row([discount_field]),
+        ft.Row([discount_field, delivery_fee_field]),
         subtotal_text,
         total_text,
         ft.Container(height=4),
@@ -865,7 +1211,14 @@ def SalesView(page: ft.Page):
         ),
         ft.Row([customer_name_field, customer_phone_field], spacing=10),
         suggestions_container,
-        customer_address_field,
+        ft.Row(
+            [
+                customer_sector_field,
+                customer_building_field,
+                customer_apartment_field,
+            ],
+            spacing=8,
+        ),
         checkout_btn,
         status_text,
     ]

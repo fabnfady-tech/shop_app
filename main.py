@@ -19,7 +19,7 @@ PAGES = [
     ("بيع", ft.Icons.POINT_OF_SALE, SalesView, False),
     ("طلبات الدليفري", ft.Icons.LOCAL_SHIPPING, DeliveryView, False),
     ("المنتجات", ft.Icons.INVENTORY_2, ProductsView, True),
-    ("المصروفات", ft.Icons.ACCOUNT_BALANCE_WALLET, ExpensesView, True),
+    ("المصروفات", ft.Icons.ACCOUNT_BALANCE_WALLET, ExpensesView, False),
     ("الإيرادات المؤجلة", ft.Icons.SCHEDULE_SEND, DeferredView, True),
     ("المرتجعات", ft.Icons.UNDO, ReturnsView, True),
     ("جدول الشهر", ft.Icons.TABLE_CHART, MonthlyView, True),
@@ -46,6 +46,15 @@ def main(page: ft.Page):
 
     current_index = {"value": 0}
     auth_state = {"unlocked": False}
+   # تخزين حالة فتح الأدمن في page.data لتكون متاحة لجميع الشاشات
+    if not hasattr(page, "data") or page.data is None:
+        page.data = {}
+    page.data["admin_unlocked"] = False
+
+    def set_unlocked(value: bool):
+        """تحديث حالة فتح الأدمن"""
+        auth_state["unlocked"] = value
+        page.data["admin_unlocked"] = value
 
     body_container = ft.Container(expand=True, padding=8)
     title_text = ft.Text(PAGES[0][0], size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
@@ -114,7 +123,7 @@ def main(page: ft.Page):
 
         def try_login(e):
             if db.verify_admin_password(pw.value or ""):
-                auth_state["unlocked"] = True
+                set_unlocked(True)
                 close_auth_dialog()
                 go_to_page(pending_index)
             else:
@@ -162,7 +171,7 @@ def main(page: ft.Page):
                 page.update()
                 return
             db.set_admin_password(pw1.value, question.value, answer.value)
-            auth_state["unlocked"] = True
+            set_unlocked(True)
             close_auth_dialog()
             go_to_page(pending_index)
 
@@ -236,7 +245,7 @@ def main(page: ft.Page):
                 page.update()
                 return
             db.reset_admin_password(pw1.value)
-            auth_state["unlocked"] = True
+            set_unlocked(True)
             close_auth_dialog()
             if pending_index is not None:
                 go_to_page(pending_index)
@@ -302,7 +311,7 @@ def main(page: ft.Page):
         hide_sidebar()
 
     def lock_screens(e=None):
-        auth_state["unlocked"] = False
+        set_unlocked(False)
         go_to_page(0)
 
     # ================= القائمة الجانبية =================

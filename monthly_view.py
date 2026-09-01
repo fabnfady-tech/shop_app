@@ -31,24 +31,42 @@ def MonthlyView(page: ft.Page):
     def month_tile(m):
         summary = year_summary_cache.get(m, {"count": 0, "total": 0.0})
         is_current = (m == today.month and state["year"] == today.year)
+
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Text(ARABIC_MONTHS[m], size=15, weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.ORANGE_400 if is_current else ft.Colors.WHITE),
-                    ft.Text(f'{summary["count"]} فاتورة', size=11, color=ft.Colors.WHITE70),
-                    ft.Text(f'{summary["total"]:.2f} ج.م', size=13, weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.GREEN_300),
+                    ft.Text(
+                        ARABIC_MONTHS[m],
+                        size=15,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.ORANGE_400 if is_current else ft.Colors.WHITE,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.Text(
+                        f'{summary["count"]} فاتورة',
+                        size=11,
+                        color=ft.Colors.WHITE70,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.Text(
+                        f'{summary["total"]:.2f} ج.م',
+                        size=13,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.GREEN_300,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=4,
             ),
-            padding=10, border_radius=14, alignment=ft.Alignment.CENTER,
-            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.ORANGE_700) if is_current else ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+            padding=10,
+            border_radius=14,
+            bgcolor=ft.Colors.BLUE_GREY_800 if not is_current else ft.Colors.BLUE_GREY_700,
             border=ft.Border.all(1.5, ft.Colors.ORANGE_400 if is_current else ft.Colors.WHITE24),
             on_click=lambda e, m=m: open_month_detail(m),
         )
+    
 
     def refresh_overview():
         year_summary_cache.clear()
@@ -67,15 +85,15 @@ def MonthlyView(page: ft.Page):
         refresh_overview()
 
     prev_year_btn = ft.IconButton(ft.Icons.ARROW_FORWARD_IOS, icon_color=ft.Colors.WHITE70, icon_size=14,
-                                    on_click=lambda e: change_year(-1))
+                                  on_click=lambda e: change_year(-1))
     next_year_btn = ft.IconButton(ft.Icons.ARROW_BACK_IOS, icon_color=ft.Colors.WHITE70, icon_size=14,
-                                    on_click=lambda e: change_year(1))
+                                  on_click=lambda e: change_year(1))
 
     overview_panel = ft.Column(
         [
             ft.Container(
                 content=ft.Row([prev_year_btn, year_label, next_year_btn],
-                                alignment=ft.MainAxisAlignment.CENTER, spacing=10),
+                               alignment=ft.MainAxisAlignment.CENTER, spacing=10),
                 bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE), padding=6, border_radius=8,
             ),
             year_total_text,
@@ -104,17 +122,16 @@ def MonthlyView(page: ft.Page):
         on_change=lambda e: (state.update(day_query=e.control.value.strip()), refresh_table()),
     )
 
-    # تعديل الأعمدة لإضافة عمود "الدليفري"
     table = ft.DataTable(
         columns=[
             ft.DataColumn(ft.Text("السيريال", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
             ft.DataColumn(ft.Text("التاريخ", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
             ft.DataColumn(ft.Text("الإجمالي", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-            ft.DataColumn(ft.Text("الدليفري", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
             ft.DataColumn(ft.Text("الدفع", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
             ft.DataColumn(ft.Text("تفاصيل", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
+            ft.DataColumn(ft.Text("حذف", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
         ],
-        rows=[], horizontal_margin=6, column_spacing=8,
+        rows=[], horizontal_margin=6, column_spacing=10,
     )
 
     detail_panel = ft.Container(
@@ -123,6 +140,42 @@ def MonthlyView(page: ft.Page):
     )
 
     summary_text = ft.Text("", size=12, color=ft.Colors.WHITE70, weight=ft.FontWeight.W_500)
+
+    # ---------------- تأكيد الحذف ----------------
+    delete_dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Row([ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.RED_400), ft.Text("تأكيد الحذف")]),
+        content=ft.Text("جارٍ التحميل...", size=13),
+        actions=[ft.TextButton("إلغاء", on_click=lambda e: close_delete_dialog())],
+    )
+    page.overlay.append(delete_dialog)
+
+    def close_delete_dialog(e=None):
+        delete_dialog.open = False
+        page.update()
+
+    def ask_delete(sale_id):
+        serial = db.invoice_serial(sale_id)
+
+        def confirm_delete(e):
+            db.delete_sale(sale_id)
+            close_delete_dialog()
+            hide_detail()
+            refresh_table()
+
+        delete_dialog.title = ft.Row([ft.Icon(ft.Icons.WARNING_AMBER, color=ft.Colors.RED_400), ft.Text("تأكيد الحذف")])
+        delete_dialog.content = ft.Text(
+            f'هتمسح الفاتورة {serial} نهائيًا وترجع كمية المنتجات للمخزون. متأكد؟',
+            size=13,
+        )
+        delete_dialog.actions = [
+            ft.TextButton("إلغاء", on_click=close_delete_dialog),
+            ft.ElevatedButton("مسح نهائي", icon=ft.Icons.DELETE_FOREVER, on_click=confirm_delete,
+                            bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+        ]
+        delete_dialog.actions_alignment = ft.MainAxisAlignment.END
+        delete_dialog.open = True
+        page.update()
 
     def show_detail(sale_id):
         serial = db.invoice_serial(sale_id)
@@ -139,7 +192,11 @@ def MonthlyView(page: ft.Page):
             [
                 ft.Row([
                     ft.Text(f"تفاصيل الفاتورة: {serial}", weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE, size=12),
-                    ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=ft.Colors.WHITE, on_click=lambda e: hide_detail())
+                    ft.Row([
+                        ft.IconButton(ft.Icons.DELETE_FOREVER, icon_size=16, icon_color=ft.Colors.RED_400,
+                                      tooltip="مسح الفاتورة", on_click=lambda e, sid=sale_id: ask_delete(sid)),
+                        ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=ft.Colors.WHITE, on_click=lambda e: hide_detail())
+                    ], spacing=0),
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Divider(color=ft.Colors.WHITE24, height=4),
                 *rows
@@ -188,81 +245,17 @@ def MonthlyView(page: ft.Page):
             except Exception:
                 formatted_date = raw_date[:16]
 
-            # تجهيز طريقة الدفع الأساسية
-            payment_type = s.get("payment_type", "نقدي")
-            paid = s.get("paid", True)
-            paid_amount = s.get("paid_amount", 0)
-            
-            payment_label = payment_type
-            if payment_type == "آجل" and not paid:
-                payment_label = f'آجل ({paid_amount:.0f}/{s["total"]:.0f})'
-
-            # جلب حالة أو نوع الدليفري
-            delivery_status = s.get("delivery_status") or s.get("delivery_type") or "توصيل"
-
-            # دمج الدليفري وبجانبه طريقة الدفع بين قوسين
-            delivery_val = f"{delivery_status} ({payment_label})"
-
-# إزالة عمود الدليفري وإبقاء الأعمدة الأساسية
-    table = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("السيريال", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-            ft.DataColumn(ft.Text("التاريخ", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-            ft.DataColumn(ft.Text("الإجمالي", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-            ft.DataColumn(ft.Text("الدفع", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-            ft.DataColumn(ft.Text("تفاصيل", color=ft.Colors.WHITE, weight=ft.FontWeight.BOLD, size=11)),
-        ],
-        rows=[], horizontal_margin=6, column_spacing=10,
-    )
-
-    def refresh_table():
-        sales = db.get_sales_for_month(state["year"], state["month"])
-
-        if state["serial_query"]:
-            q = state["serial_query"].lower()
-            sales = [s for s in sales if q in db.invoice_serial(s["id"]).lower() or q in str(s["id"])]
-
-        if state["day_query"] and state["day_query"].isdigit():
-            target_day = int(state["day_query"])
-            filtered_sales = []
-            for s in sales:
-                try:
-                    dt_str = s["created_at"].split("T")[0]
-                    d_num = int(dt_str.split("-")[2])
-                    if d_num == target_day:
-                        filtered_sales.append(s)
-                except Exception:
-                    pass
-            sales = filtered_sales
-
-        month_label.value = f'{ARABIC_MONTHS[state["month"]]} {state["year"]}'
-        table.rows.clear()
-        total = 0.0
-        for s_row in sales:
-            s = dict(s_row)
-            total += s["total"]
-
-            raw_date = s["created_at"]
-            try:
-                date_part, time_part = raw_date.split("T")
-                y, m_num, d_num = date_part.split("-")
-                formatted_date = f"{int(d_num)} {ARABIC_MONTHS[int(m_num)]} ({time_part[:5]})"
-            except Exception:
-                formatted_date = raw_date[:16]
-
-            # جلب طريقة الدفع الصحيحة وتجنب أن تكون كلمة "دليفري" هي طريقة الدفع نفسها
             payment_type = s.get("payment_type", "نقدي")
             if not payment_type or payment_type == "دليفري":
                 payment_type = "نقدي"
 
             paid = s.get("paid", True)
             paid_amount = s.get("paid_amount", 0)
-            
+
             payment_label = payment_type
             if payment_type == "آجل" and not paid:
                 payment_label = f'آجل ({paid_amount:.0f}/{s["total"]:.0f})'
 
-            # التحقق مما إذا كانت الفاتورة دليفري لإضافة الكلمة بجانب طريقة الدفع الفعلية فقط
             delivery_status = s.get("delivery_status") or s.get("delivery_type")
             if delivery_status:
                 payment_label = f"{payment_label} (دليفري)"
@@ -274,10 +267,13 @@ def MonthlyView(page: ft.Page):
                     ft.DataCell(ft.Text(f'{s["total"]:.2f}', size=10, color=ft.Colors.ORANGE_300, weight=ft.FontWeight.BOLD)),
                     ft.DataCell(ft.Text(payment_label, size=10, color=ft.Colors.WHITE)),
                     ft.DataCell(ft.TextButton("عرض", style=ft.ButtonStyle(color=ft.Colors.CYAN_200, padding=2), on_click=lambda e, sid=s["id"]: show_detail(sid))),
+                    ft.DataCell(ft.IconButton(ft.Icons.DELETE_OUTLINE, icon_size=17, icon_color=ft.Colors.RED_400,
+                                              tooltip="مسح الفاتورة", on_click=lambda e, sid=s["id"]: ask_delete(sid))),
                 ])
             )
         summary_text.value = f"العدد: {len(sales)} فاتورة  |  المبلغ: {total:.2f} ج.م"
         page.update()
+
     def change_month(delta):
         m = state["month"] + delta
         y = state["year"]
