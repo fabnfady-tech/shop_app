@@ -11,3 +11,5 @@ dependencies = [
 
 [tool.flet]
 product_name = "Aleefy Pets"
+[tool.flet.android]
+dependencies = ["pyjnius"]

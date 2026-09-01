@@ -242,52 +242,28 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
 
 def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     try:
-        img_path, pil_image = generate_invoice_image(
+        # 1. توليد صورة الفاتورة
+        img_path, _ = generate_invoice_image(
             inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
         )
 
-        printed_via_usb = False
+        # 2. فتح الصورة عبر أندرويد لإرسالها لتطبيق RawBT
+        try:
+            page.launch_url(f"file://{img_path}")
+        except Exception:
+            if os.name == 'nt':
+                os.startfile(img_path)
 
-        if HAS_ESCPOS:
-            common_printers = [
-                (0x0416, 0x5011),
-                (0x0fe6, 0x811e),
-                (0x04b8, 0x0202),
-            ]
-
-            for v_id, p_id in common_printers:
-                try:
-                    printer = Usb(v_id, p_id, timeout=0, in_ep=0x81, out_ep=0x02)
-                    printer.image(pil_image)
-                    printer.cut()
-                    printed_via_usb = True
-                    
-                    snack = ft.SnackBar(ft.Text("تمت الطباعة بنجاح عبر USB! 🖨️"), bgcolor=ft.Colors.GREEN_700)
-                    page.overlay.append(snack)
-                    snack.open = True
-                    page.update()
-                    break
-                except Exception:
-                    continue
-
-        if not printed_via_usb:
-            try:
-                if os.name == 'nt':
-                    os.startfile(img_path)
-            except Exception:
-                pass
-
-            snack = ft.SnackBar(
-                ft.Text("تمت معاينة الفاتورة بنجاح 🖼️"), 
-                bgcolor=ft.Colors.BLUE_700
-            )
-            page.overlay.append(snack)
-            snack.open = True
-            page.update()
+        snack = ft.SnackBar(
+            ft.Text("جاري فتح الفاتورة للطباعة 🖨️"), 
+            bgcolor=ft.Colors.GREEN_700
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
 
     except Exception as ex:
-        print(f"خطأ أثناء معاينة/طباعة الفاتورة: {ex}")
-
+        print(f"خطأ أثناء تجهيز الفاتورة: {ex}")
 
 CATEGORY_ICONS = {
     "طعام": "🍖",
