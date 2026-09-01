@@ -889,3 +889,35 @@ def update_delivery_payment_and_status(sale_id, payment_type, total_amount=None,
                 "UPDATE sales SET delivery_status=?, payment_type=? WHERE id=?",
                 (status, payment_type, sale_id),
             )
+def clear_all_customers():
+    """مسح بيانات العملاء وعناوينهم وأرقامهم من كافة الجداول"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        
+        # 1. مسح جدول العملاء
+        cursor.execute("DELETE FROM customers;")
+        
+        # 2. تفريغ بيانات العملاء والعناوين من جدول المبيعات القديمة
+        try:
+            cursor.execute("""
+                UPDATE sales 
+                SET customer_name = NULL, 
+                    customer_phone = NULL, 
+                    customer_address = NULL;
+            """)
+        except Exception as e:
+            print(f"Sales update info: {e}")
+
+        # إعادة تعيين الترقيم
+        try:
+            cursor.execute("DELETE FROM sqlite_sequence WHERE name='customers';")
+        except Exception:
+            pass
+            
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        conn.commit()
+    print("تم مسح كافة سجلات وأرقام العملاء بنجاح!")
+
+# تشغيل الدالة
+# clear_all_customers()
