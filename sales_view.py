@@ -182,22 +182,26 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     draw_line(dash=True)
 
     # ------------------ الأصناف ------------------
+    # ------------------ الأصناف (تنسيق منظم ومبسط) ------------------
     for item in items:
-        name = item.get("product_name") or item.get("name", "")
-        qty = item.get("quantity") or item.get("qty", 1)
-        price = item.get("unit_price") or item.get("price", 0.0)
-        unit_str = "كجم" if item.get("unit") == "كيلو" else "قطعة"
-        line_total = qty * price
+     name = item.get("product_name") or item.get("name", "")
+     qty = item.get("quantity") or item.get("qty", 1)
+     price = item.get("unit_price") or item.get("price", 0.0)
+    
+    # إذا كان كجم يظهر كجم، وإذا كانت قطعة تُكتب الكمية فقط لتفادي الازدحام
+     unit_str = " كجم" if item.get("unit") == "كيلو" else ""
+     line_total = qty * price
 
-        draw_text(name, font_bold, align="right")
-        
-        detail_txt = f"{qty:g} {unit_str} x {price:.2f}"
-        amount_txt = f"{line_total:.2f} ج.م"
-        
-        draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
-        bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
-        draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
-        y += 35
+     draw_text(name, font_bold, align="right")
+    
+    # استخدام الرمز الرياضي × بدلاً من حرف x
+     detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
+     amount_txt = f"{line_total:.2f} ج.م"
+    
+     draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
+     bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
+     draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
+     y += 35
 
     draw_line(dash=True)
 
