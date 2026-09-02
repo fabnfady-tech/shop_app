@@ -82,29 +82,29 @@ def parse_stored_address(address_str):
 
 def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     """
-    توليد صورة أنيقة عالية الجودة للفاتورة الحرارية (80mm) جاهزة للطباعة المباشرة.
+    توليد صورة أنيقة عالية الجودة للفاتورة الحرارية جاهزة للطباعة المباشرة.
     """
     width = 576  # العرض بالبكسل لطابعة 80 مم (203 DPI)
     padding = 20
     
-    # ------------------ تحميل الخطوط بشكل مضمون ------------------
+    # تحميل الخطوط بوضوح عالي (Arial Bold)
     font_regular = None
     font_bold = None
     font_title = None
 
     font_sources = [
         FONT_PATH,
+        "C:\\Windows\\Fonts\\arialbd.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
-        "C:\\Windows\\Fonts\\tahoma.ttf",
-        "C:\\Windows\\Fonts\\seguiemj.ttf"
+        "C:\\Windows\\Fonts\\tahoma.ttf"
     ]
 
     for font_p in font_sources:
         if font_p and os.path.exists(font_p):
             try:
-                font_regular = ImageFont.truetype(font_p, 22)
-                font_bold = ImageFont.truetype(font_p, 26)
-                font_title = ImageFont.truetype(font_p, 34)
+                font_regular = ImageFont.truetype(font_p, 24)
+                font_bold = ImageFont.truetype(font_p, 28)
+                font_title = ImageFont.truetype(font_p, 36)
                 break
             except Exception:
                 continue
@@ -117,12 +117,12 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     
     y = 20
 
-    def draw_text(text, font, align="center", fill="black"):
+    # استخدام ارتفاع سطور ثابت لمنع انكماش وتشوه الخط العربي
+    def draw_text(text, font, align="center", fill="black", spacing=38):
         nonlocal y
         text_ar = ar(text)
         bbox = draw.textbbox((0, 0), text_ar, font=font)
         w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
         
         if align == "center":
             x = (width - w) // 2
@@ -132,7 +132,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
             x = padding
 
         draw.text((x, y), text_ar, fill=fill, font=font)
-        y += h + 14
+        y += spacing
 
     def draw_line(dash=False):
         nonlocal y
@@ -155,53 +155,50 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         except Exception as e:
             print(f"خطأ في إضافة اللوجو: {e}")
 
-    draw_text(SHOP_NAME, font_title, align="center")
-    draw_text(SHOP_NAME_AR, font_bold, align="center")
-    draw_text(SHOP_ADDRESS, font_regular, align="center")
-    draw_text(f"واتساب: {SHOP_WHATSAPP}", font_regular, align="center")
-    draw_text("مكالمات: " + " - ".join(SHOP_PHONES), font_regular, align="center")
+    draw_text(SHOP_NAME, font_title, align="center", spacing=45)
+    draw_text(SHOP_NAME_AR, font_bold, align="center", spacing=40)
+    draw_text(SHOP_ADDRESS, font_regular, align="center", spacing=35)
+    draw_text(f"واتساب: {SHOP_WHATSAPP}", font_regular, align="center", spacing=35)
+    draw_text("مكالمات: " + " - ".join(SHOP_PHONES), font_regular, align="center", spacing=35)
     
     draw_line()
 
     # ------------------ بيانات الفاتورة ------------------
-    draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right")
-    draw_text(f"التاريخ: {date_str}", font_regular, align="right")
-    draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right")
+    draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right", spacing=38)
+    draw_text(f"التاريخ: {date_str}", font_regular, align="right", spacing=35)
+    draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right", spacing=35)
     
     if is_delivery:
-        draw_text("نوع الطلب: دليفري", font_regular, align="right")
+        draw_text("نوع الطلب: دليفري", font_regular, align="right", spacing=35)
         if customer_name:
-            draw_text(f"العميل: {customer_name}", font_regular, align="right")
+            draw_text(f"العميل: {customer_name}", font_regular, align="right", spacing=35)
         if customer_phone:
-            draw_text(f"التليفون: {customer_phone}", font_regular, align="right")
+            draw_text(f"التليفون: {customer_phone}", font_regular, align="right", spacing=35)
         if customer_address:
-            draw_text(f"العنوان: {customer_address}", font_bold, align="right")
+            draw_text(f"العنوان: {customer_address}", font_bold, align="right", spacing=38)
     else:
-        draw_text("نوع الطلب: استلام من الفرع", font_regular, align="right")
+        draw_text("نوع الطلب: استلام من الفرع", font_regular, align="right", spacing=35)
     
     draw_line(dash=True)
 
     # ------------------ الأصناف ------------------
-    # ------------------ الأصناف (تنسيق منظم ومبسط) ------------------
     for item in items:
-     name = item.get("product_name") or item.get("name", "")
-     qty = item.get("quantity") or item.get("qty", 1)
-     price = item.get("unit_price") or item.get("price", 0.0)
-    
-    # إذا كان كجم يظهر كجم، وإذا كانت قطعة تُكتب الكمية فقط لتفادي الازدحام
-     unit_str = " كجم" if item.get("unit") == "كيلو" else ""
-     line_total = qty * price
+        name = item.get("product_name") or item.get("name", "")
+        qty = item.get("quantity") or item.get("qty", 1)
+        price = item.get("unit_price") or item.get("price", 0.0)
+        
+        unit_str = " كجم" if item.get("unit") == "كيلو" else ""
+        line_total = qty * price
 
-     draw_text(name, font_bold, align="right")
-    
-    # استخدام الرمز الرياضي × بدلاً من حرف x
-     detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
-     amount_txt = f"{line_total:.2f} ج.م"
-    
-     draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
-     bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
-     draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
-     y += 35
+        draw_text(name, font_bold, align="right", spacing=35)
+        
+        detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
+        amount_txt = f"{line_total:.2f} ج.م"
+        
+        draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
+        bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
+        draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
+        y += 40
 
     draw_line(dash=True)
 
@@ -214,7 +211,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         
         bbox = draw.textbbox((0, 0), ar(label), font=f)
         draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(label), fill="black", font=f)
-        y += 40
+        y += 42
 
     subtotal = sum((it.get("quantity") or it.get("qty", 1)) * (it.get("unit_price") or it.get("price", 0.0)) for it in items)
     draw_total_row("الإجمالي الفرعي", subtotal)
@@ -229,8 +226,8 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     draw_line()
 
     # ------------------ الفوتر ------------------
-    draw_text("شكرا لتعاملكم معنا", font_bold, align="center")
-    draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center")
+    draw_text("شكرا لتعاملكم معنا", font_bold, align="center", spacing=38)
+    draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center", spacing=35)
     y += 20
 
     final_img = img_temp.crop((0, 0, width, y))
@@ -238,7 +235,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     temp_img_path = os.path.join(tempfile.gettempdir(), f"invoice_{inv_number}.png")
     final_img.save(temp_img_path)
     return temp_img_path, final_img
-
 
 import flet as ft
 from flet_printing import Printing
@@ -257,7 +253,7 @@ def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee,
 
         # 2. تحويل الصورة لـ PDF (مطلوب لأن share_pdf بتتوقع PDF bytes مش صورة)
         pdf_path = img_path.replace(".png", ".pdf")
-        final_img.convert("RGB").save(pdf_path, "PDF")
+        final_img.convert("RGB").save(pdf_path, "PDF", resolution=203.0)
 
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
