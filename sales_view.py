@@ -247,15 +247,20 @@ def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee,
             inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
         )
 
-        # 2. فتح الصورة عبر أندرويد لإرسالها لتطبيق RawBT
+        # 2. فتح الصورة عبر تطبيق RawBT لإرسالها للطباعة
+        import base64
         try:
-            page.launch_url(f"file://{img_path}")
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode("utf-8")
+            rawbt_url = f"rawbt:data:image/png;base64,{img_b64}"
+            page.launch_url(rawbt_url)
         except Exception:
+            # فولباك للتجربة على ويندوز/ديسكتوب (مش هيحصل على أندرويد أصلاً)
             if os.name == 'nt':
                 os.startfile(img_path)
 
         snack = ft.SnackBar(
-            ft.Text("جاري فتح الفاتورة للطباعة 🖨️"), 
+            ft.Text("جاري فتح الفاتورة للطباعة 🖨️"),
             bgcolor=ft.Colors.GREEN_700
         )
         page.overlay.append(snack)
@@ -264,7 +269,6 @@ def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee,
 
     except Exception as ex:
         print(f"خطأ أثناء تجهيز الفاتورة: {ex}")
-
 CATEGORY_ICONS = {
     "طعام": "🍖",
     "إكسسوارات": "🎀",
