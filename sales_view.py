@@ -1,6 +1,6 @@
 """
 شاشة البيع - Aleefy Pets
-تصميم مدمج وأنيق لكروت المنتجات وطباعة حرارية مباشرة عبر OTG USB
+تصميم مدمج وأنيق لكروت المنتجات وطباعة حرارية تلقائية مباشرة لـ RawBT عبر Localhost (127.0.0.1)
 """
 import flet as ft
 import db
@@ -8,23 +8,17 @@ from datetime import datetime
 import os
 import tempfile
 import re
+import socket
 import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
-
-# مكتبة الطابعة الحرارية
-try:
-    from escpos.printer import Usb
-    HAS_ESCPOS = True
-except ImportError:
-    HAS_ESCPOS = False
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "amiri-regular.ttf")
 
 # ------------------------------------------------------------------
-# بيانات المحل اللي هتظهر فوق كل فاتورة مطبوعة
+# بيانات المحل التي تظهر في الفاتورة المطبوعة
 # ------------------------------------------------------------------
 SHOP_NAME = "Aleefy Pets"
 SHOP_NAME_AR = "أليفي بيتس لرعاية الحيوانات"
@@ -48,10 +42,6 @@ def ar(text):
 
 
 def parse_stored_address(address_str):
-    """
-    تفكيك نص العنوان المدمج وتوزيعه على الحقول الثلاثة
-    (القطاع/المنطقة، رقم العمارة، الشقة/الدور)
-    """
     if not address_str:
         return "", "", ""
 
@@ -59,21 +49,16 @@ def parse_stored_address(address_str):
     building = ""
     apartment = ""
 
-    # إذا كان العنوان مكتوباً بالتنسيق المنسق (يحتوي على علامة -)
     parts = [p.strip() for p in address_str.split("-") if p.strip()]
 
     for part in parts:
-        # استخراج القطاع / المنطقة
         if "القطاع" in part or "المنطقة" in part:
             sector = re.sub(r'^(القطاع/المنطقة|القطاع|المنطقة)\s*[:/]?\s*', '', part).strip()
-        # استخراج رقم العمارة
         elif "عمارة" in part:
             building = re.sub(r'^عمارة\s*[:/]?\s*', '', part).strip()
-        # استخراج رقم الشقة
         elif "شقة" in part:
             apartment = re.sub(r'^شقة\s*[:/]?\s*', '', part).strip()
 
-    # إذا لم يستطع التفكيك القائم على الكلمات المفتاحية، يوضع النص كاملاً في خانة القطاع/المنطقة
     if not sector and not building and not apartment:
         sector = address_str.strip()
 
@@ -82,12 +67,11 @@ def parse_stored_address(address_str):
 
 def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     """
-    توليد صورة أنيقة عالية الجودة للفاتورة الحرارية جاهزة للطباعة المباشرة.
+    توليد صورة الفاتورة للطباعة الحرارية.
     """
-    width = 576  # العرض بالبكسل لطابعة 80 مم (203 DPI)
+    width = 576  # العرض الأساسي للصورة
     padding = 20
     
-    # تحميل الخطوط بوضوح عالي (Arial Bold)
     font_regular = None
     font_bold = None
     font_title = None
@@ -117,7 +101,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     
     y = 20
 
-    # استخدام ارتفاع سطور ثابت لمنع انكماش وتشوه الخط العربي
     def draw_text(text, font, align="center", fill="black", spacing=38):
         nonlocal y
         text_ar = ar(text)
@@ -236,58 +219,78 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     final_img.save(temp_img_path)
     return temp_img_path, final_img
 
-import flet as ft
-from flet_printing import Printing
 
+def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=40213, printer_width=384):
+    """
+    تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً
+    """
+    try:
+        w_percent = printer_width / float(final_img.width)
+        h_size = int(float(final_img.height) * float(w_percent))
+        resized_img = final_img.resize((printer_width, h_size), Image.Resampling.LANCZOS)
 
-import flet as ft
-from flet_printing import Printing
+        bw_img = resized_img.convert('1')
+        width, height = bw_img.size
+        width_bytes = (width + 7) // 8
+
+        pixels = bw_img.load()
+
+        cmd = bytearray([
+            0x1B, 0x40,  # Initialize
+            0x1D, 0x76, 0x30, 0x00,  # GS v 0 0
+            width_bytes % 256, width_bytes // 256,
+            height % 256, height // 256
+        ])
+
+        for y in range(height):
+            for x_byte in range(width_bytes):
+                byte_val = 0
+                for bit in range(8):
+                    x = x_byte * 8 + bit
+                    if x < width:
+                        if pixels[x, y] == 0:  # بكسل أسود
+                            byte_val |= (1 << (7 - bit))
+                cmd.append(byte_val)
+
+        cmd.extend([0x1B, 0x64, 0x04])
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(5)
+            s.connect((rawbt_ip, port))
+            s.sendall(cmd)
+            
+        return True, "تمت الطباعة بنجاح! 🖨️"
+    except Exception as ex:
+        return False, f"تأكد من تفعيل Socket Server في RawBT: {ex}"
 
 
 def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
+    """
+    الطباعة التلقائية عبر 127.0.0.1 لتعمل مع RawBT مباشرة سواء في التجربة أو عند توصيل USB OTG
+    """
     try:
-        # 1. توليد صورة الفاتورة (زي ما هي بالظبط)
-        img_path, final_img = generate_invoice_image(
+        _, final_img = generate_invoice_image(
             inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
         )
 
-        # 2. تحويل الصورة لـ PDF (مطلوب لأن share_pdf بتتوقع PDF bytes مش صورة)
-        pdf_path = img_path.replace(".png", ".pdf")
-        final_img.convert("RGB").save(pdf_path, "PDF", resolution=203.0)
+        success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
 
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
+        if success:
+            snack = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.GREEN_700)
+        else:
+            snack = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.RED_700)
 
-        # 3. تسجيل خدمة الطباعة مرة واحدة بس
-        printing = getattr(page, "_printing_service", None)
-        if printing is None:
-            printing = Printing()
-            page.services.append(printing)
-            page._printing_service = printing
-
-        # 4. فتح قائمة المشاركة القياسية لأندرويد - RawBT هيظهر فيها تلقائي
-        async def do_share():
-            await printing.share_pdf(pdf_bytes, filename=f"invoice_{inv_number}.pdf")
-
-        page.run_task(do_share)
-
-        snack = ft.SnackBar(
-            ft.Text("اختار RawBT من قائمة المشاركة للطباعة 🖨️"),
-            bgcolor=ft.Colors.GREEN_700
-        )
         page.overlay.append(snack)
         snack.open = True
         page.update()
 
     except Exception as ex:
-        print(f"خطأ أثناء تجهيز الفاتورة: {ex}")
-        snack = ft.SnackBar(
-            ft.Text(f"حصل خطأ أثناء الطباعة: {ex}"),
-            bgcolor=ft.Colors.RED_700
-        )
+        snack = ft.SnackBar(ft.Text(f"حصل خطأ أثناء الطباعة: {ex}"), bgcolor=ft.Colors.RED_700)
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
+
 CATEGORY_ICONS = {
     "طعام": "🍖",
     "إكسسوارات": "🎀",
@@ -564,7 +567,6 @@ def SalesView(page: ft.Page):
         customer_name_field.value = name if name else ""
         customer_phone_field.value = phone if phone else ""
 
-        # تفكيك العنوان المخزن وتعبئة الحقول المخصصة
         sector, building, apartment = parse_stored_address(address)
         customer_sector_field.value = sector
         customer_building_field.value = building
@@ -1132,7 +1134,7 @@ def SalesView(page: ft.Page):
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.CENTER,
-                spacing=15,
+                spacing=10,
             ),
         ]
         pos_view.visible = False
