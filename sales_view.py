@@ -220,7 +220,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     return temp_img_path, final_img
 
 
-def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=40213, printer_width=384):
+def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=384):
     """
     تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً
     """
