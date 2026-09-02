@@ -240,27 +240,43 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     return temp_img_path, final_img
 
 
+import flet as ft
+from flet_printing import Printing
+
+
+import flet as ft
+from flet_printing import Printing
+
+
 def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     try:
-        # 1. توليد صورة الفاتورة
-        img_path, _ = generate_invoice_image(
+        # 1. توليد صورة الفاتورة (زي ما هي بالظبط)
+        img_path, final_img = generate_invoice_image(
             inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
         )
 
-        # 2. فتح الصورة عبر تطبيق RawBT لإرسالها للطباعة
-        import base64
-        try:
-            with open(img_path, "rb") as f:
-                img_b64 = base64.b64encode(f.read()).decode("utf-8")
-            rawbt_url = f"rawbt:data:image/png;base64,{img_b64}"
-            page.launch_url(rawbt_url)
-        except Exception:
-            # فولباك للتجربة على ويندوز/ديسكتوب (مش هيحصل على أندرويد أصلاً)
-            if os.name == 'nt':
-                os.startfile(img_path)
+        # 2. تحويل الصورة لـ PDF (مطلوب لأن share_pdf بتتوقع PDF bytes مش صورة)
+        pdf_path = img_path.replace(".png", ".pdf")
+        final_img.convert("RGB").save(pdf_path, "PDF")
+
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        # 3. تسجيل خدمة الطباعة مرة واحدة بس
+        printing = getattr(page, "_printing_service", None)
+        if printing is None:
+            printing = Printing()
+            page.services.append(printing)
+            page._printing_service = printing
+
+        # 4. فتح قائمة المشاركة القياسية لأندرويد - RawBT هيظهر فيها تلقائي
+        async def do_share():
+            await printing.share_pdf(pdf_bytes, filename=f"invoice_{inv_number}.pdf")
+
+        page.run_task(do_share)
 
         snack = ft.SnackBar(
-            ft.Text("جاري فتح الفاتورة للطباعة 🖨️"),
+            ft.Text("اختار RawBT من قائمة المشاركة للطباعة 🖨️"),
             bgcolor=ft.Colors.GREEN_700
         )
         page.overlay.append(snack)
@@ -269,6 +285,13 @@ def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee,
 
     except Exception as ex:
         print(f"خطأ أثناء تجهيز الفاتورة: {ex}")
+        snack = ft.SnackBar(
+            ft.Text(f"حصل خطأ أثناء الطباعة: {ex}"),
+            bgcolor=ft.Colors.RED_700
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
 CATEGORY_ICONS = {
     "طعام": "🍖",
     "إكسسوارات": "🎀",

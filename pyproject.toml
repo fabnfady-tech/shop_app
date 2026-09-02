@@ -1,15 +1,16 @@
 [project]
 name = "aleefy_pets"
 version = "0.1.0"
-description = "Aleefy Pets App"
 dependencies = [
-    "flet",
+    "flet>=0.85.0",
     "fpdf2",
     "arabic_reshaper",
     "python-bidi",
+    "flet-printing"
 ]
 
 [tool.flet]
 product_name = "Aleefy Pets"
 [tool.flet.android]
 dependencies = ["pyjnius"]
+exclude = ["flet_printing"]
