@@ -114,10 +114,11 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     
     y = 25
 
+    # هذه الدالة هي الأهم: تقوم بتصغير حجم الخط تلقائياً إذا كان النص طويلاً، وترسم العربي بالشكل الصحيح
     def draw_text(text, font, align="center", fill="black", spacing=46, stroke=0):
         nonlocal y
         text_ar = ar(text)
-        # التعديل السحري: ده بيكبر/بيصغر الخط تلقائياً عشان النص ميتقصش ويطلع ####
+        # نضبط الحجم تلقائياً لو النص طويل
         while font.size > 10:
             bbox = draw.textbbox((0, 0), text_ar, font=font, stroke_width=stroke)
             w = bbox[2] - bbox[0]
@@ -197,9 +198,15 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
         amount_txt = f"{line_total:.2f} ج.م"
         
-        draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
+        # هنا التغيير المهم جداً: بدل draw.text المباشر استخدم draw_text
+        draw_text(amount_txt, font_regular, align="right", spacing=48)
+        draw_text(detail_txt, font_regular, align="right", spacing=0) # سنقوم بتعديل تنسيق السطر هنا
+
+        # تنفيذ تنسيق السطر بطريقة مخصصة لليمنين
+        draw.text((padding, y - 48), ar(amount_txt), fill="black", font=font_regular)
         bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
-        draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
+        draw.text((width - padding - (bbox[2] - bbox[0]), y - 48), ar(detail_txt), fill="black", font=font_regular)
+        
         y += 48
 
     draw_line(dash=True)
@@ -349,6 +356,34 @@ def print_invoice_only(page, dialog):
         page.overlay.append(snack)
         snack.open = True
         page.update()
+def save_image_only(page, dialog):
+    try:
+        final_img = getattr(page, 'invoice_img', None)
+        inv_number = getattr(page, 'invoice_number', '0000')
+        
+        if not final_img:
+            snack = ft.SnackBar(ft.Text("⚠️ لا توجد صورة للحفظ"), bgcolor=ft.Colors.RED_700)
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return
+        
+        saved_path, folder = save_invoice_image(page, inv_number, final_img)
+        
+        if saved_path and os.path.exists(saved_path):
+            page.pop_dialog()
+            page.update()
+        else:
+            snack = ft.SnackBar(ft.Text("❌ فشل حفظ الصورة"), bgcolor=ft.Colors.RED_700)
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            
+    except Exception as ex:
+        snack = ft.SnackBar(ft.Text(f"❌ خطأ: {ex}"), bgcolor=ft.Colors.RED_700)
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
 def close_dialog(dialog, page):
     page.pop_dialog()
     page.update()
@@ -385,7 +420,7 @@ def show_invoice_preview_with_actions(page, inv_number, date_str, items, discoun
             ),
             actions=[
                 ft.TextButton("إغلاق", on_click=lambda e: close_dialog(dialog, page), icon=ft.Icons.CLOSE),
-                ft.ElevatedButton("💾 حفظ في التلفون", on_click=lambda e: save_image_only(page, dialog),
+                  ft.ElevatedButton("💾 حفظ في التلفون", on_click=lambda e: save_image_only(page, dialog),
                                  bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE, icon=ft.Icons.SAVE),
                 ft.ElevatedButton("🖨️ طباعة OTG", on_click=lambda e: print_invoice_only(page, dialog),
                                  bgcolor=ft.Colors.GREEN_600, color=ft.Colors.WHITE, icon=ft.Icons.PRINT),
