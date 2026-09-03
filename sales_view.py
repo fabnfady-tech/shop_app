@@ -290,19 +290,16 @@ def save_invoice_image(page, inv_number, final_img):
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"invoice_{inv_number}_{timestamp}.png"
-
-        # احفظ مؤقتاً في مجلد التطبيق (موجود في أندرويد)
         temp_dir = os.path.join(tempfile.gettempdir(), "Aleefy_Invoices")
         Path(temp_dir).mkdir(parents=True, exist_ok=True)
         temp_path = os.path.join(temp_dir, filename)
         final_img.save(temp_path)
 
-        # دي أهم دالة: لما المستخدم يختار المكان ويتأكد، بنقفل النافذة وبنحفظ
         def save_dialog_result(e):
             if e.path:
                 import shutil
                 shutil.copy(temp_path, e.path)
-                page.pop_dialog()  # نقفل نافذة المعاينة هنا بس
+                page.pop_dialog()
                 snack = ft.SnackBar(ft.Text("✅ تم الحفظ بنجاح!"), bgcolor=ft.Colors.GREEN_700)
                 page.overlay.append(snack)
                 snack.open = True
@@ -313,11 +310,8 @@ def save_invoice_image(page, inv_number, final_img):
                 snack.open = True
                 page.update()
 
-        # فتح نافذة الحفظ الرسمية بتاعة أندرويد (بتشتغل على الويندوز كمان بس بنفس الشكل)
         page.save_file(dialog_title="اختر مكان حفظ الفاتورة", file_name=filename, allowed_extensions=["png"], on_result=save_dialog_result)
-        
         return temp_path, temp_dir
-
     except Exception as ex:
         print(f"خطأ في حفظ الصورة: {ex}")
         return None, None
@@ -360,44 +354,40 @@ def save_image_only(page, dialog):
     try:
         final_img = getattr(page, 'invoice_img', None)
         inv_number = getattr(page, 'invoice_number', '0000')
-        
         if not final_img:
             snack = ft.SnackBar(ft.Text("⚠️ لا توجد صورة للحفظ"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(snack)
             snack.open = True
             page.update()
             return
-        
         saved_path, folder = save_invoice_image(page, inv_number, final_img)
-        
-        if saved_path and os.path.exists(saved_path):
-            page.pop_dialog()
-            page.update()
-        else:
+        if not saved_path:
             snack = ft.SnackBar(ft.Text("❌ فشل حفظ الصورة"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(snack)
             snack.open = True
             page.update()
-            
     except Exception as ex:
         snack = ft.SnackBar(ft.Text(f"❌ خطأ: {ex}"), bgcolor=ft.Colors.RED_700)
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
 def close_dialog(dialog, page):
     page.pop_dialog()
     page.update()
-def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
+async def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
                                        delivery_fee, total, payment_type, is_delivery, 
                                        customer_name="", customer_phone="", customer_address="", invoice_view=None):
     print("✅ تم الضغط على زر المعاينة")
     try:
-        # استخدام مكتبة PIL لرسم الفاتورة (تعمل على أي إصدار)
-        temp_path, final_img = generate_invoice_image(
-            inv_number, date_str, items, discount, delivery_fee, total, 
-            payment_type, is_delivery, customer_name, customer_phone, customer_address
-        )
+        if invoice_view is not None:
+            invoice_view.visible = True
+            page.update()
 
+        # أهم سطر: الصورة هتتاخد من الواجهة النضيفة
+        img_bytes = await page.screenshot(invoice_view)
+        final_img = Image.open(BytesIO(img_bytes))
+        
         page.invoice_img = final_img
         page.invoice_number = inv_number
         
@@ -420,7 +410,7 @@ def show_invoice_preview_with_actions(page, inv_number, date_str, items, discoun
             ),
             actions=[
                 ft.TextButton("إغلاق", on_click=lambda e: close_dialog(dialog, page), icon=ft.Icons.CLOSE),
-                  ft.ElevatedButton("💾 حفظ في التلفون", on_click=lambda e: save_image_only(page, dialog),
+                ft.ElevatedButton("💾 حفظ في التلفون", on_click=lambda e: save_image_only(page, dialog),
                                  bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE, icon=ft.Icons.SAVE),
                 ft.ElevatedButton("🖨️ طباعة OTG", on_click=lambda e: print_invoice_only(page, dialog),
                                  bgcolor=ft.Colors.GREEN_600, color=ft.Colors.WHITE, icon=ft.Icons.PRINT),
