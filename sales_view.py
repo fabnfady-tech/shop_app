@@ -200,7 +200,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         
         # هنا التغيير المهم جداً: بدل draw.text المباشر استخدم draw_text
         draw_text(amount_txt, font_regular, align="right", spacing=48)
-        draw_text(detail_txt, font_regular, align="right", spacing=0) # سنقوم بتعديل تنسيق السطر هنا
+        draw_text(detail_txt, font_regular, align="right", spacing=0)
 
         # تنفيذ تنسيق السطر بطريقة مخصصة لليمنين
         draw.text((padding, y - 48), ar(amount_txt), fill="black", font=font_regular)
@@ -350,6 +350,7 @@ def print_invoice_only(page, dialog):
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
 def save_image_only(page, dialog):
     try:
         final_img = getattr(page, 'invoice_img', None)
@@ -375,6 +376,7 @@ def save_image_only(page, dialog):
 def close_dialog(dialog, page):
     page.pop_dialog()
     page.update()
+
 async def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
                                        delivery_fee, total, payment_type, is_delivery, 
                                        customer_name="", customer_phone="", customer_address="", invoice_view=None):
@@ -933,10 +935,7 @@ def SalesView(page: ft.Page):
                         icon=ft.Icons.PREVIEW,
                         bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE,
                         style=ft.ButtonStyle(padding=15, shape=ft.RoundedRectangleBorder(radius=10)),
-on_click=lambda e: show_invoice_preview_with_actions(
-    page, serial, now_str, items, discount, delivery_fee, total, 
-    payment_type, is_delivery, customer_name, customer_phone, customer_address, invoice_view
-),
+                      on_click=lambda e: page.run_task(show_invoice_preview_with_actions, page, serial, now_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address, invoice_view),
                     ),
                     ft.ElevatedButton(
                         "بيع جديد 🛒",
