@@ -64,12 +64,11 @@ def parse_stored_address(address_str):
 
     return sector, building, apartment
 
-
 def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     """
-    توليد صورة الفاتورة للطباعة الحرارية.
+    توليد صورة الفاتورة للطباعة الحرارية بأحجام خطوط كبيرة ومسافات واضحة.
     """
-    width = 576  # العرض الأساسي للصورة
+    width = 576  # العرض المباشر لطابعات 80mm (يمكن تغييره إلى 384 لطابعات 58mm)
     padding = 20
     
     font_regular = None
@@ -83,12 +82,13 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         "C:\\Windows\\Fonts\\tahoma.ttf"
     ]
 
+    # تكبير أحجام الخطوط لمنع الصغر والتبهيت
     for font_p in font_sources:
         if font_p and os.path.exists(font_p):
             try:
-                font_regular = ImageFont.truetype(font_p, 24)
-                font_bold = ImageFont.truetype(font_p, 28)
-                font_title = ImageFont.truetype(font_p, 36)
+                font_regular = ImageFont.truetype(font_p, 28)
+                font_bold = ImageFont.truetype(font_p, 34)
+                font_title = ImageFont.truetype(font_p, 42)
                 break
             except Exception:
                 continue
@@ -96,12 +96,12 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     if not font_regular:
         font_regular = font_bold = font_title = ImageFont.load_default()
 
-    img_temp = Image.new("RGB", (width, 2500), "white")
+    img_temp = Image.new("RGB", (width, 3000), "white")
     draw = ImageDraw.Draw(img_temp)
     
-    y = 20
+    y = 25
 
-    def draw_text(text, font, align="center", fill="black", spacing=38):
+    def draw_text(text, font, align="center", fill="black", spacing=46):
         nonlocal y
         text_ar = ar(text)
         bbox = draw.textbbox((0, 0), text_ar, font=font)
@@ -120,47 +120,47 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     def draw_line(dash=False):
         nonlocal y
         if dash:
-            for x in range(padding, width - padding, 12):
-                draw.line([(x, y), (x + 6, y)], fill="black", width=2)
+            for x in range(padding, width - padding, 14):
+                draw.line([(x, y), (x + 7, y)], fill="black", width=2)
         else:
-            draw.line([(padding, y), (width - padding, y)], fill="black", width=2)
-        y += 15
+            draw.line([(padding, y), (width - padding, y)], fill="black", width=3)
+        y += 20
 
     # ------------------ الشعار والهيدر ------------------
     logo_path = get_logo_path()
     if logo_path:
         try:
             logo = Image.open(logo_path).convert("RGBA")
-            logo.thumbnail((160, 160))
+            logo.thumbnail((200, 200))
             logo_x = (width - logo.width) // 2
             img_temp.paste(logo, (logo_x, y), logo)
-            y += logo.height + 15
+            y += logo.height + 20
         except Exception as e:
             print(f"خطأ في إضافة اللوجو: {e}")
 
-    draw_text(SHOP_NAME, font_title, align="center", spacing=45)
-    draw_text(SHOP_NAME_AR, font_bold, align="center", spacing=40)
-    draw_text(SHOP_ADDRESS, font_regular, align="center", spacing=35)
-    draw_text(f"واتساب: {SHOP_WHATSAPP}", font_regular, align="center", spacing=35)
-    draw_text("مكالمات: " + " - ".join(SHOP_PHONES), font_regular, align="center", spacing=35)
+    draw_text(SHOP_NAME, font_title, align="center", spacing=52)
+    draw_text(SHOP_NAME_AR, font_bold, align="center", spacing=46)
+    draw_text(SHOP_ADDRESS, font_regular, align="center", spacing=40)
+    draw_text(f"واتساب: {SHOP_WHATSAPP}", font_regular, align="center", spacing=40)
+    draw_text("مكالمات: " + " - ".join(SHOP_PHONES), font_regular, align="center", spacing=40)
     
     draw_line()
 
     # ------------------ بيانات الفاتورة ------------------
-    draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right", spacing=38)
-    draw_text(f"التاريخ: {date_str}", font_regular, align="right", spacing=35)
-    draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right", spacing=35)
+    draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right", spacing=46)
+    draw_text(f"التاريخ: {date_str}", font_regular, align="right", spacing=40)
+    draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right", spacing=40)
     
     if is_delivery:
-        draw_text("نوع الطلب: دليفري", font_regular, align="right", spacing=35)
+        draw_text("نوع الطلب: دليفري", font_regular, align="right", spacing=40)
         if customer_name:
-            draw_text(f"العميل: {customer_name}", font_regular, align="right", spacing=35)
+            draw_text(f"العميل: {customer_name}", font_regular, align="right", spacing=40)
         if customer_phone:
-            draw_text(f"التليفون: {customer_phone}", font_regular, align="right", spacing=35)
+            draw_text(f"التليفون: {customer_phone}", font_regular, align="right", spacing=40)
         if customer_address:
-            draw_text(f"العنوان: {customer_address}", font_bold, align="right", spacing=38)
+            draw_text(f"العنوان: {customer_address}", font_bold, align="right", spacing=46)
     else:
-        draw_text("نوع الطلب: استلام من الفرع", font_regular, align="right", spacing=35)
+        draw_text("نوع الطلب: استلام من الفرع", font_regular, align="right", spacing=40)
     
     draw_line(dash=True)
 
@@ -173,7 +173,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         unit_str = " كجم" if item.get("unit") == "كيلو" else ""
         line_total = qty * price
 
-        draw_text(name, font_bold, align="right", spacing=35)
+        draw_text(name, font_bold, align="right", spacing=42)
         
         detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
         amount_txt = f"{line_total:.2f} ج.م"
@@ -181,7 +181,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         draw.text((padding, y), ar(amount_txt), fill="black", font=font_regular)
         bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
         draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(detail_txt), fill="black", font=font_regular)
-        y += 40
+        y += 48
 
     draw_line(dash=True)
 
@@ -194,7 +194,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         
         bbox = draw.textbbox((0, 0), ar(label), font=f)
         draw.text((width - padding - (bbox[2] - bbox[0]), y), ar(label), fill="black", font=f)
-        y += 42
+        y += 50
 
     subtotal = sum((it.get("quantity") or it.get("qty", 1)) * (it.get("unit_price") or it.get("price", 0.0)) for it in items)
     draw_total_row("الإجمالي الفرعي", subtotal)
@@ -209,9 +209,9 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     draw_line()
 
     # ------------------ الفوتر ------------------
-    draw_text("شكرا لتعاملكم معنا", font_bold, align="center", spacing=38)
-    draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center", spacing=35)
-    y += 20
+    draw_text("شكرا لتعاملكم معنا", font_bold, align="center", spacing=46)
+    draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center", spacing=40)
+    y += 25
 
     final_img = img_temp.crop((0, 0, width, y))
     
@@ -220,16 +220,20 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     return temp_img_path, final_img
 
 
-def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=384):
+def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=576):
     """
-    تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً
+    تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً.
+    تستخدم الحد الأدنى للتنقيط (Thresholding) لجعل النصوص سوداء حادة 100%.
     """
     try:
         w_percent = printer_width / float(final_img.width)
         h_size = int(float(final_img.height) * float(w_percent))
         resized_img = final_img.resize((printer_width, h_size), Image.Resampling.LANCZOS)
 
-        bw_img = resized_img.convert('1')
+        # تحويل الصورة إلى تدرج رمادي ثم تطبيق حد نقي للأسود والأبيض لمنع التنقيط الرمادي الباهت
+        gray_img = resized_img.convert("L")
+        bw_img = gray_img.point(lambda x: 0 if x < 200 else 255, "1")
+
         width, height = bw_img.size
         width_bytes = (width + 7) // 8
 
