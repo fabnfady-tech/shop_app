@@ -17,7 +17,13 @@ from io import BytesIO
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FONT_PATH = os.path.join(BASE_DIR, "amiri-regular.ttf")
+
+FONT_REGULAR_CANDIDATES = ["amiri-regular.ttf", "Amiri-Regular.ttf", "AmiriQuran-Regular.ttf"]
+FONT_PATH = next(
+    (os.path.join(BASE_DIR, name) for name in FONT_REGULAR_CANDIDATES
+     if os.path.exists(os.path.join(BASE_DIR, name))),
+    os.path.join(BASE_DIR, "amiri-regular.ttf")
+)
 
 FONT_BOLD_CANDIDATES = ["amiri-bold.ttf", "Amiri-Bold.ttf", "AmiriQuran-Bold.ttf"]
 FONT_BOLD_PATH = next(
