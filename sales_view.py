@@ -377,19 +377,17 @@ def close_dialog(dialog, page):
     page.pop_dialog()
     page.update()
 
-async def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
+def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
                                        delivery_fee, total, payment_type, is_delivery, 
                                        customer_name="", customer_phone="", customer_address="", invoice_view=None):
     print("✅ تم الضغط على زر المعاينة")
     try:
-        if invoice_view is not None:
-            invoice_view.visible = True
-            page.update()
+        # استخدام مكتبة الرسم العادية PIL (بتشتغل على أي نسخة وبتظبط حجم الخط)
+        temp_path, final_img = generate_invoice_image(
+            inv_number, date_str, items, discount, delivery_fee, total, 
+            payment_type, is_delivery, customer_name, customer_phone, customer_address
+        )
 
-        # أهم سطر: الصورة هتتاخد من الواجهة النضيفة
-        img_bytes = await page.screenshot(invoice_view)
-        final_img = Image.open(BytesIO(img_bytes))
-        
         page.invoice_img = final_img
         page.invoice_number = inv_number
         
@@ -429,7 +427,6 @@ async def show_invoice_preview_with_actions(page, inv_number, date_str, items, d
         page.overlay.append(snack)
         snack.open = True
         page.update()
-
 CATEGORY_ICONS = {
     "طعام": "🍖", "إكسسوارات": "🎀", "أدوية وعناية": "💊", "ألعاب": "🧸",
     "نظافة": "🧴", "حيوانات": "🐾", "زواحف": "🦎", "طيور": "🐦", "اسماك": "🐟",
@@ -935,7 +932,10 @@ def SalesView(page: ft.Page):
                         icon=ft.Icons.PREVIEW,
                         bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE,
                         style=ft.ButtonStyle(padding=15, shape=ft.RoundedRectangleBorder(radius=10)),
-                      on_click=lambda e: page.run_task(show_invoice_preview_with_actions, page, serial, now_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address, invoice_view),
+                     on_click=lambda e: show_invoice_preview_with_actions(
+    page, serial, now_str, items, discount, delivery_fee, total, 
+    payment_type, is_delivery, customer_name, customer_phone, customer_address, invoice_view
+),
                     ),
                     ft.ElevatedButton(
                         "بيع جديد 🛒",
