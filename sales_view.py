@@ -186,28 +186,30 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     draw_line(dash=True)
 
     for item in items:
-        name = item.get("product_name") or item.get("name", "")
-        qty = item.get("quantity") or item.get("qty", 1)
-        price = item.get("unit_price") or item.get("price", 0.0)
-        
-        unit_str = " كجم" if item.get("unit") == "كيلو" else ""
-        line_total = qty * price
+     name = item.get("product_name") or item.get("name", "")
+     qty = item.get("quantity") or item.get("qty", 1)
+     price = item.get("unit_price") or item.get("price", 0.0)
 
-        draw_text(name, font_bold, align="right", spacing=42)
-        
-        detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
-        amount_txt = f"{line_total:.2f} ج.م"
-        
-        # هنا التغيير المهم جداً: بدل draw.text المباشر استخدم draw_text
-        draw_text(amount_txt, font_regular, align="right", spacing=48)
-        draw_text(detail_txt, font_regular, align="right", spacing=0)
+     unit_str = " كجم" if item.get("unit") == "كيلو" else ""
+     line_total = qty * price
 
-        # تنفيذ تنسيق السطر بطريقة مخصصة لليمنين
-        draw.text((padding, y - 48), ar(amount_txt), fill="black", font=font_regular)
-        bbox = draw.textbbox((0, 0), ar(detail_txt), font=font_regular)
-        draw.text((width - padding - (bbox[2] - bbox[0]), y - 48), ar(detail_txt), fill="black", font=font_regular)
-        
-        y += 48
+     draw_text(name, font_bold, align="right", spacing=42)
+
+     detail_txt = f"{qty:g}{unit_str} × {price:.2f}"
+     amount_txt = f"{line_total:.2f} ج.م"
+
+     amount_ar = ar(amount_txt)
+     detail_ar = ar(detail_txt)
+
+    # المبلغ على الشمال
+     draw.text((padding, y), amount_ar, fill="black", font=font_regular)
+
+    # الكمية × السعر على اليمين
+     bbox = draw.textbbox((0, 0), detail_ar, font=font_regular)
+     detail_w = bbox[2] - bbox[0]
+     draw.text((width - padding - detail_w, y), detail_ar, fill="black", font=font_regular)
+
+     y += 48
 
     draw_line(dash=True)
 
