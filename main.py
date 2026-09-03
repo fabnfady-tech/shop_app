@@ -420,4 +420,4 @@ def main(page: ft.Page):
 if __name__ == "__main__":
     db.init_db()
     db.apply_recurring_expenses()
-    ft.app(target=main)
+    ft.run(main)  # تم تغيير ft.app إلى ft.run عشان يشتغل على آخر نسخة flet

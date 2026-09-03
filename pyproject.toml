@@ -14,3 +14,7 @@ product_name = "Aleefy Pets"
 [tool.flet.android]
 dependencies = ["pyjnius"]
 exclude = ["flet_printing"]
+[tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.READ_EXTERNAL_STORAGE" = true
+"android.permission.WRITE_EXTERNAL_STORAGE" = true

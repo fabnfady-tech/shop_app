@@ -1,6 +1,5 @@
 """
 شاشة البيع - Aleefy Pets
-تصميم مدمج وأنيق لكروت المنتجات وطباعة حرارية تلقائية مباشرة لـ RawBT عبر Localhost (127.0.0.1)
 """
 import flet as ft
 import db
@@ -12,13 +11,14 @@ import socket
 import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
-from pathlib import Path  # ✅ أضفناها عشان التعامل مع المجلدات
+from pathlib import Path
+import base64
+from io import BytesIO
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "amiri-regular.ttf")
 
-# ابحث عن خط عريض حقيقي لو موجود (نتيجة أوضح بكتير من تكبير الخط العادي)
 FONT_BOLD_CANDIDATES = ["amiri-bold.ttf", "Amiri-Bold.ttf", "AmiriQuran-Bold.ttf"]
 FONT_BOLD_PATH = next(
     (os.path.join(BASE_DIR, name) for name in FONT_BOLD_CANDIDATES
@@ -26,20 +26,9 @@ FONT_BOLD_PATH = next(
     None
 )
 
-# عرض الطباعة بالبكسل:
-#   576 = طابعات 80mm بدقة 203dpi (الافتراضي)
-#   384 = طابعات 58mm بدقة 203dpi
-# لو طابعتك 58mm وطلعت الفاتورة متمددة/مش واضحة، غيّر الرقم ده لـ 384
 PRINTER_WIDTH_PX = 576
-
-# حد الأبيض/الأسود (Threshold) المستخدم في تحويل الصورة لطباعة حرارية.
-# لو الحروف طلعت باهتة/متقطعة زوّد الرقم شوية (مثلاً 210-220).
-# لو الحروف طلعت سميكة زيادة وملتصقة، قلّل الرقم شوية (مثلاً 180-190).
 BW_THRESHOLD = 205
 
-# ------------------------------------------------------------------
-# بيانات المحل التي تظهر في الفاتورة المطبوعة
-# ------------------------------------------------------------------
 SHOP_NAME = "Aleefy Pets"
 SHOP_NAME_AR = "أليفي بيتس لرعاية الحيوانات"
 SHOP_ADDRESS = "سيتي بارك مول - قطاع د - زهراء أكتوبر"
@@ -86,9 +75,6 @@ def parse_stored_address(address_str):
 
 
 def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
-    """
-    توليد صورة الفاتورة للطباعة الحرارية بأحجام خطوط كبيرة ومسافات واضحة.
-    """
     width = PRINTER_WIDTH_PX
     padding = 20
     
@@ -103,7 +89,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         "C:\\Windows\\Fonts\\tahoma.ttf"
     ]
 
-    # تكبير أحجام الخطوط لمنع الصغر والتبهيت
     for font_p in font_sources:
         if font_p and os.path.exists(font_p):
             try:
@@ -117,7 +102,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     if not font_regular:
         font_regular = font_bold = font_title = ImageFont.load_default()
 
-    # لو لقينا ملف Bold حقيقي، استخدمه بدل تكبير الخط العادي
     if FONT_BOLD_PATH:
         try:
             font_bold = ImageFont.truetype(FONT_BOLD_PATH, 34)
@@ -155,7 +139,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
             draw.line([(padding, y), (width - padding, y)], fill="black", width=3)
         y += 20
 
-    # ------------------ الشعار والهيدر ------------------
     logo_path = get_logo_path()
     if logo_path:
         try:
@@ -175,7 +158,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     
     draw_line()
 
-    # ------------------ بيانات الفاتورة ------------------
     draw_text(f"رقم الفاتورة: {inv_number}", font_bold, align="right", spacing=46)
     draw_text(f"التاريخ: {date_str}", font_regular, align="right", spacing=40)
     draw_text(f"طريقة الدفع: {payment_type}", font_regular, align="right", spacing=40)
@@ -193,7 +175,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     
     draw_line(dash=True)
 
-    # ------------------ الأصناف ------------------
     for item in items:
         name = item.get("product_name") or item.get("name", "")
         qty = item.get("quantity") or item.get("qty", 1)
@@ -214,7 +195,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
 
     draw_line(dash=True)
 
-    # ------------------ الإجماليات ------------------
     def draw_total_row(label, value, is_bold=False):
         nonlocal y
         f = font_bold if is_bold else font_regular
@@ -237,7 +217,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     draw_total_row("الإجمالي النهائي", total, is_bold=True)
     draw_line()
 
-    # ------------------ الفوتر ------------------
     draw_text("شكرا لتعاملكم معنا", font_bold, align="center", spacing=46)
     draw_text("Aleefy Pets - أليفي بيتس", font_regular, align="center", spacing=40)
     y += 25
@@ -250,9 +229,6 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
 
 
 def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=PRINTER_WIDTH_PX):
-    """
-    تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً.
-    """
     try:
         w_percent = printer_width / float(final_img.width)
         h_size = int(float(final_img.height) * float(w_percent))
@@ -267,8 +243,8 @@ def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width
         pixels = bw_img.load()
 
         cmd = bytearray([
-            0x1B, 0x40,  # Initialize
-            0x1D, 0x76, 0x30, 0x00,  # GS v 0 0
+            0x1B, 0x40,
+            0x1D, 0x76, 0x30, 0x00,
             width_bytes % 256, width_bytes // 256,
             height % 256, height // 256
         ])
@@ -279,7 +255,7 @@ def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width
                 for bit in range(8):
                     x = x_byte * 8 + bit
                     if x < width:
-                        if pixels[x, y] == 0:  # بكسل أسود
+                        if pixels[x, y] == 0:
                             byte_val |= (1 << (7 - bit))
                 cmd.append(byte_val)
 
@@ -295,59 +271,16 @@ def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width
         return False, f"تأكد من تفعيل Socket Server في RawBT: {ex}"
 
 
-def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
-    """
-    الطباعة التلقائية عبر 127.0.0.1 (تُستخدم للطباعة المباشرة دون معاينة)
-    """
-    try:
-        _, final_img = generate_invoice_image(
-            inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
-        )
-
-        success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
-
-        if success:
-            snack = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.GREEN_700)
-        else:
-            snack = ft.SnackBar(ft.Text(msg), bgcolor=ft.Colors.RED_700)
-
-        page.overlay.append(snack)
-        snack.open = True
-        page.update()
-
-    except Exception as ex:
-        snack = ft.SnackBar(ft.Text(f"حصل خطأ أثناء الطباعة: {ex}"), bgcolor=ft.Colors.RED_700)
-        page.overlay.append(snack)
-        snack.open = True
-        page.update()
-
-
-# ============================================================
-# 🔥 الوظائف الجديدة (معاينة + حفظ + طباعة ذكية) 🔥
-# ============================================================
-
 def save_invoice_image(inv_number, final_img):
-    """
-    حفظ صورة الفاتورة في مجلد خاص على التلفون
-    """
     try:
-        # مجلد الصور في التلفون (Android) أو Windows
-        if os.name == 'posix':  # Android / Linux
-            pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures", "AleefyPets")
-        else:  # Windows
-            pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures", "AleefyPets")
-        
-        # إنشاء المجلد لو مش موجود
+        pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures", "AleefyPets")
         Path(pictures_dir).mkdir(parents=True, exist_ok=True)
         
-        # اسم الملف بالتاريخ
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"invoice_{inv_number}_{timestamp}.png"
         filepath = os.path.join(pictures_dir, filename)
         
-        # حفظ الصورة
         final_img.save(filepath)
-        
         return filepath, pictures_dir
         
     except Exception as ex:
@@ -355,79 +288,18 @@ def save_invoice_image(inv_number, final_img):
         return None, None
 
 
-def print_or_save_invoice(page, inv_number, date_str, items, discount, delivery_fee, total, 
-                          payment_type, is_delivery, customer_name="", customer_phone="", 
-                          customer_address=""):
-    """
-    محاولة الطباعة على OTG، لو فشلت تحفظ الصورة في التلفون
-    """
-    try:
-        temp_path, final_img = generate_invoice_image(
-            inv_number, date_str, items, discount, delivery_fee, total, 
-            payment_type, is_delivery, customer_name, customer_phone, customer_address
-        )
-        
-        success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
-        
-        if success:
-            snack = ft.SnackBar(
-                ft.Text(f"✅ {msg}"), 
-                bgcolor=ft.Colors.GREEN_700,
-                duration=3000
-            )
-            page.overlay.append(snack)
-            snack.open = True
-            page.update()
-            return
-        
-        # لو فشلت الطباعة، احفظ الصورة
-        saved_path, folder = save_invoice_image(inv_number, final_img)
-        
-        if saved_path and os.path.exists(saved_path):
-            snack = ft.SnackBar(
-                ft.Text(f"⚠️ الطباعة غير متوفرة\n📁 تم حفظ الفاتورة في:\n{folder}"), 
-                bgcolor=ft.Colors.ORANGE_700,
-                duration=5000
-            )
-        else:
-            saved_path = temp_path
-            snack = ft.SnackBar(
-                ft.Text(f"⚠️ تم حفظ الصورة مؤقتاً في:\n{temp_path}"), 
-                bgcolor=ft.Colors.ORANGE_700,
-                duration=5000
-            )
-        
-        page.overlay.append(snack)
-        snack.open = True
-        page.update()
-        
-    except Exception as ex:
-        snack = ft.SnackBar(
-            ft.Text(f"❌ خطأ: {ex}"), 
-            bgcolor=ft.Colors.RED_700,
-            duration=4000
-        )
-        page.overlay.append(snack)
-        snack.open = True
-        page.update()
-
-
 def close_dialog(dialog, page):
-    dialog.open = False
+    page.pop_dialog()
     page.update()
 
 
 def save_image_only(page, dialog):
-    """حفظ الصورة فقط في التلفون"""
     try:
         final_img = getattr(page, 'invoice_img', None)
         inv_number = getattr(page, 'invoice_number', '0000')
         
         if not final_img:
-            snack = ft.SnackBar(
-                ft.Text("⚠️ لا توجد صورة للحفظ"), 
-                bgcolor=ft.Colors.RED_700
-            )
+            snack = ft.SnackBar(ft.Text("⚠️ لا توجد صورة للحفظ"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(snack)
             snack.open = True
             page.update()
@@ -436,44 +308,33 @@ def save_image_only(page, dialog):
         saved_path, folder = save_invoice_image(inv_number, final_img)
         
         if saved_path and os.path.exists(saved_path):
-            dialog.open = False
+            page.pop_dialog()
             snack = ft.SnackBar(
                 ft.Text(f"✅ تم الحفظ في:\n{folder}"), 
-                bgcolor=ft.Colors.GREEN_700,
-                duration=4000
+                bgcolor=ft.Colors.GREEN_700, duration=4000
             )
             page.overlay.append(snack)
             snack.open = True
             page.update()
         else:
-            snack = ft.SnackBar(
-                ft.Text("❌ فشل حفظ الصورة"), 
-                bgcolor=ft.Colors.RED_700
-            )
+            snack = ft.SnackBar(ft.Text("❌ فشل حفظ الصورة"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(snack)
             snack.open = True
             page.update()
             
     except Exception as ex:
-        snack = ft.SnackBar(
-            ft.Text(f"❌ خطأ: {ex}"), 
-            bgcolor=ft.Colors.RED_700
-        )
+        snack = ft.SnackBar(ft.Text(f"❌ خطأ: {ex}"), bgcolor=ft.Colors.RED_700)
         page.overlay.append(snack)
         snack.open = True
         page.update()
 
 
 def print_invoice_only(page, dialog):
-    """طباعة الفاتورة فقط على OTG"""
     try:
         final_img = getattr(page, 'invoice_img', None)
         
         if not final_img:
-            snack = ft.SnackBar(
-                ft.Text("⚠️ لا توجد صورة للطباعة"), 
-                bgcolor=ft.Colors.RED_700
-            )
+            snack = ft.SnackBar(ft.Text("⚠️ لا توجد صورة للطباعة"), bgcolor=ft.Colors.RED_700)
             page.overlay.append(snack)
             snack.open = True
             page.update()
@@ -482,30 +343,22 @@ def print_invoice_only(page, dialog):
         success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
         
         if success:
-            dialog.open = False
-            snack = ft.SnackBar(
-                ft.Text(f"✅ {msg}"), 
-                bgcolor=ft.Colors.GREEN_700,
-                duration=3000
-            )
+            page.pop_dialog()
+            snack = ft.SnackBar(ft.Text(f"✅ {msg}"), bgcolor=ft.Colors.GREEN_700, duration=3000)
             page.overlay.append(snack)
             snack.open = True
             page.update()
         else:
             snack = ft.SnackBar(
                 ft.Text(f"❌ فشل الطباعة: {msg}\n💾 استخدم زر الحفظ بدلاً من ذلك"), 
-                bgcolor=ft.Colors.RED_700,
-                duration=5000
+                bgcolor=ft.Colors.RED_700, duration=5000
             )
             page.overlay.append(snack)
             snack.open = True
             page.update()
             
     except Exception as ex:
-        snack = ft.SnackBar(
-            ft.Text(f"❌ خطأ في الطباعة: {ex}"), 
-            bgcolor=ft.Colors.RED_700
-        )
+        snack = ft.SnackBar(ft.Text(f"❌ خطأ في الطباعة: {ex}"), bgcolor=ft.Colors.RED_700)
         page.overlay.append(snack)
         snack.open = True
         page.update()
@@ -514,25 +367,27 @@ def print_invoice_only(page, dialog):
 def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
                                        delivery_fee, total, payment_type, is_delivery, 
                                        customer_name="", customer_phone="", customer_address=""):
-    """
-    عرض معاينة الفاتورة مع خيارات: طباعة أو حفظ
-    """
+    print("✅ تم الضغط على زر المعاينة")
+    
     try:
         temp_path, final_img = generate_invoice_image(
             inv_number, date_str, items, discount, delivery_fee, total, 
             payment_type, is_delivery, customer_name, customer_phone, customer_address
         )
         
-        # خزن الصورة في الـ page عشان الأزرار تستخدمها
         page.invoice_img = final_img
-        page.invoice_path = temp_path
         page.invoice_number = inv_number
+        
+        buffered = BytesIO()
+        final_img.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+        img_src = f"data:image/png;base64,{img_str}"
         
         dialog = ft.AlertDialog(
             title=ft.Text("معاينة الفاتورة 🖨️", weight=ft.FontWeight.BOLD),
             content=ft.Container(
                 content=ft.Column([
-                    ft.Image(src=temp_path, width=400, height=500, fit=ft.BoxFit.CONTAIN),
+                    ft.Image(src=img_src, width=400, height=500, fit=ft.BoxFit.CONTAIN),
                     ft.Row([
                         ft.Icon(ft.Icons.INFO, color=ft.Colors.BLUE_400, size=16),
                         ft.Text("تأكد من الصورة قبل الطباعة", size=12, color=ft.Colors.GREY_400)
@@ -542,66 +397,41 @@ def show_invoice_preview_with_actions(page, inv_number, date_str, items, discoun
                 padding=10,
             ),
             actions=[
-                ft.TextButton(
-                    "إغلاق", 
-                    on_click=lambda e: close_dialog(dialog, page),
-                    icon=ft.Icons.CLOSE
-                ),
-                ft.ElevatedButton(
-                    "💾 حفظ في التلفون", 
-                    on_click=lambda e: save_image_only(page, dialog),
-                    bgcolor=ft.Colors.BLUE_600,
-                    color=ft.Colors.WHITE,
-                    icon=ft.Icons.SAVE
-                ),
-                ft.ElevatedButton(
-                    "🖨️ طباعة OTG", 
-                    on_click=lambda e: print_invoice_only(page, dialog),
-                    bgcolor=ft.Colors.GREEN_600,
-                    color=ft.Colors.WHITE,
-                    icon=ft.Icons.PRINT
-                ),
+                ft.TextButton("إغلاق", on_click=lambda e: close_dialog(dialog, page), icon=ft.Icons.CLOSE),
+                ft.ElevatedButton("💾 حفظ في التلفون", on_click=lambda e: save_image_only(page, dialog),
+                                 bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE, icon=ft.Icons.SAVE),
+                ft.ElevatedButton("🖨️ طباعة OTG", on_click=lambda e: print_invoice_only(page, dialog),
+                                 bgcolor=ft.Colors.GREEN_600, color=ft.Colors.WHITE, icon=ft.Icons.PRINT),
             ],
             actions_alignment=ft.MainAxisAlignment.CENTER,
         )
         
-        page.dialog = dialog
-        dialog.open = True
+        page.show_dialog(dialog)
         page.update()
         
     except Exception as ex:
+        print(f"❌ خطأ في المعاينة: {ex}")
         snack = ft.SnackBar(
-            ft.Text(f"❌ خطأ في المعاينة: {ex}"), 
-            bgcolor=ft.Colors.RED_700
+            ft.Text(f"❌ خطأ: {ex}"), 
+            bgcolor=ft.Colors.RED_700, duration=5000
         )
         page.overlay.append(snack)
         snack.open = True
         page.update()
 
 
-# ============================================================
-# نهاية الوظائف الجديدة
-# ============================================================
-
-
 CATEGORY_ICONS = {
-    "طعام": "🍖",
-    "إكسسوارات": "🎀",
-    "أدوية وعناية": "💊",
-    "ألعاب": "🧸",
-    "نظافة": "🧴",
-    "حيوانات": "🐾",
-    "زواحف": "🦎",
-    "طيور": "🐦",
-    "اسماك": "🐟",
+    "طعام": "🍖", "إكسسوارات": "🎀", "أدوية وعناية": "💊", "ألعاب": "🧸",
+    "نظافة": "🧴", "حيوانات": "🐾", "زواحف": "🦎", "طيور": "🐦", "اسماك": "🐟",
 }
-
 
 def category_icon(cat):
     return CATEGORY_ICONS.get(cat, "🐾")
 
 
 def SalesView(page: ft.Page):
+    otg_switch = ft.Switch(label="الطابعة متوصلة (OTG)", value=False)
+
     cart = {}
     state = {"category": "الكل", "search": ""}
     logo_path = get_logo_path()
@@ -622,180 +452,53 @@ def SalesView(page: ft.Page):
     )
 
     chips_row = ft.Row(spacing=8, scroll=ft.ScrollMode.AUTO)
-
-    products_grid = ft.GridView(
-        expand=True,
-        max_extent=135,
-        child_aspect_ratio=0.85,
-        spacing=10,
-        run_spacing=10,
-    )
-
+    products_grid = ft.GridView(expand=True, max_extent=135, child_aspect_ratio=0.85, spacing=10, run_spacing=10)
     cart_list = ft.Column(spacing=6)
 
     discount_field = ft.TextField(
-        hint_text="الخصم (ج.م)",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        value="0",
-        rtl=True,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        width=140,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        focused_border_color=ft.Colors.ORANGE_600,
-        height=42,
-        content_padding=10,
-        on_change=lambda e: update_totals_only(),
+        hint_text="الخصم (ج.م)", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
+        value="0", rtl=True, keyboard_type=ft.KeyboardType.NUMBER, width=140,
+        border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK,
+        border_color=ft.Colors.ORANGE_400, focused_border_color=ft.Colors.ORANGE_600,
+        height=42, content_padding=10, on_change=lambda e: update_totals_only(),
     )
 
     delivery_fee_field = ft.TextField(
-        hint_text="رسوم التوصيل (ج.م)",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        value="0",
-        rtl=True,
-        visible=False,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        width=160,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.GREEN_400,
-        focused_border_color=ft.Colors.GREEN_600,
-        height=42,
-        content_padding=10,
-        on_change=lambda e: update_totals_only(),
+        hint_text="رسوم التوصيل (ج.م)", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
+        value="0", rtl=True, visible=False, keyboard_type=ft.KeyboardType.NUMBER, width=160,
+        border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK,
+        border_color=ft.Colors.GREEN_400, focused_border_color=ft.Colors.GREEN_600,
+        height=42, content_padding=10, on_change=lambda e: update_totals_only(),
     )
 
     subtotal_text = ft.Text("", size=13, color=ft.Colors.WHITE)
-    total_text = ft.Text(
-        "الإجمالي: 0.00 ج.م",
-        size=20,
-        weight=ft.FontWeight.BOLD,
-        color=ft.Colors.ORANGE_400,
-    )
+    total_text = ft.Text("الإجمالي: 0.00 ج.م", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_400)
 
     checkout_btn = ft.ElevatedButton(
-        "إتمام البيع 💳",
-        icon=ft.Icons.SHOPPING_BAG,
-        bgcolor=ft.Colors.GREEN_700,
-        color=ft.Colors.WHITE,
-        style=ft.ButtonStyle(
-            padding=15, shape=ft.RoundedRectangleBorder(radius=10)
-        ),
-        on_click=lambda e: checkout(e),
-        disabled=True,
+        "إتمام البيع 💳", icon=ft.Icons.SHOPPING_BAG,
+        bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE,
+        style=ft.ButtonStyle(padding=15, shape=ft.RoundedRectangleBorder(radius=10)),
+        on_click=lambda e: checkout(e), disabled=True,
     )
 
-    is_delivery_switch = ft.Switch(
-        label="طلب دليفري 🛵",
-        value=False,
-        active_color=ft.Colors.GREEN_500,
-        on_change=lambda e: toggle_customer_fields(),
-    )
-
+    is_delivery_switch = ft.Switch(label="طلب دليفري 🛵", value=False, active_color=ft.Colors.GREEN_500, on_change=lambda e: toggle_customer_fields())
     payment_type_radio = ft.RadioGroup(
-        content=ft.Row(
-            [
-                ft.Radio(
-                    value="نقدي", label="نقدي 💵", fill_color=ft.Colors.ORANGE_400
-                ),
-                ft.Radio(
-                    value="محفظة", label="محفظة 📱", fill_color=ft.Colors.ORANGE_400
-                ),
-                ft.Radio(
-                    value="آجل", label="آجل 📝", fill_color=ft.Colors.ORANGE_400
-                ),
-            ],
-            alignment=ft.MainAxisAlignment.START,
-            spacing=15,
-        ),
-        value="نقدي",
-        on_change=lambda e: toggle_customer_fields(),
+        content=ft.Row([
+            ft.Radio(value="نقدي", label="نقدي 💵", fill_color=ft.Colors.ORANGE_400),
+            ft.Radio(value="محفظة", label="محفظة 📱", fill_color=ft.Colors.ORANGE_400),
+            ft.Radio(value="آجل", label="آجل 📝", fill_color=ft.Colors.ORANGE_400),
+        ], alignment=ft.MainAxisAlignment.START, spacing=15),
+        value="نقدي", on_change=lambda e: toggle_customer_fields(),
     )
 
-    customer_name_field = ft.TextField(
-        hint_text="اسم العميل",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        rtl=True,
-        visible=False,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        height=42,
-        content_padding=10,
-        expand=True,
-    )
-
-    customer_phone_field = ft.TextField(
-        hint_text="رقم التليفون",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        rtl=True,
-        visible=False,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        height=42,
-        content_padding=10,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda e: filter_customers(e.control.value),
-        expand=True,
-    )
-
-    customer_sector_field = ft.TextField(
-        hint_text="القطاع / المنطقة",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        rtl=True,
-        visible=False,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        height=42,
-        content_padding=10,
-        expand=True,
-    )
-
-    customer_building_field = ft.TextField(
-        hint_text="رقم العمارة",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        rtl=True,
-        visible=False,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        height=42,
-        content_padding=10,
-        expand=True,
-    )
-
-    customer_apartment_field = ft.TextField(
-        hint_text="الشقة / الدور",
-        hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12),
-        rtl=True,
-        visible=False,
-        border_radius=10,
-        bgcolor=ft.Colors.WHITE,
-        color=ft.Colors.BLACK,
-        border_color=ft.Colors.ORANGE_400,
-        height=42,
-        content_padding=10,
-        expand=True,
-    )
+    customer_name_field = ft.TextField(hint_text="اسم العميل", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12), rtl=True, visible=False, border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK, border_color=ft.Colors.ORANGE_400, height=42, content_padding=10, expand=True)
+    customer_phone_field = ft.TextField(hint_text="رقم التليفون", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12), rtl=True, visible=False, border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK, border_color=ft.Colors.ORANGE_400, height=42, content_padding=10, keyboard_type=ft.KeyboardType.NUMBER, on_change=lambda e: filter_customers(e.control.value), expand=True)
+    customer_sector_field = ft.TextField(hint_text="القطاع / المنطقة", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12), rtl=True, visible=False, border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK, border_color=ft.Colors.ORANGE_400, height=42, content_padding=10, expand=True)
+    customer_building_field = ft.TextField(hint_text="رقم العمارة", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12), rtl=True, visible=False, border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK, border_color=ft.Colors.ORANGE_400, height=42, content_padding=10, expand=True)
+    customer_apartment_field = ft.TextField(hint_text="الشقة / الدور", hint_style=ft.TextStyle(color=ft.Colors.GREY_600, size=12), rtl=True, visible=False, border_radius=10, bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK, border_color=ft.Colors.ORANGE_400, height=42, content_padding=10, expand=True)
 
     suggestions_list = ft.ListView(expand=True, spacing=2, padding=5)
-    suggestions_container = ft.Container(
-        content=suggestions_list,
-        bgcolor=ft.Colors.WHITE,
-        border_radius=8,
-        border=ft.Border.all(1, ft.Colors.ORANGE_400),
-        visible=False,
-        height=100,
-    )
+    suggestions_container = ft.Container(content=suggestions_list, bgcolor=ft.Colors.WHITE, border_radius=8, border=ft.Border.all(1, ft.Colors.ORANGE_400), visible=False, height=100)
 
     def filter_customers(query):
         query = (query or "").strip()
@@ -813,41 +516,24 @@ def SalesView(page: ft.Page):
             print(f"DB Search Error: {ex}")
 
         suggestions_list.controls.clear()
-
         if matched:
             for c in matched:
                 c_name = c["name"] if isinstance(c, dict) else c[1]
                 c_phone = c["phone"] if isinstance(c, dict) else c[2]
-                c_addr = (
-                    c["address"]
-                    if isinstance(c, dict)
-                    else (c[3] if len(c) > 3 else "")
-                )
+                c_addr = c["address"] if isinstance(c, dict) else (c[3] if len(c) > 3 else "")
 
                 suggestions_list.controls.append(
                     ft.ListTile(
-                        title=ft.Text(
-                            f"{c_name} - {c_phone}", size=12, color=ft.Colors.BLACK
-                        ),
-                        subtitle=ft.Text(
-                            f"العنوان: {c_addr}", size=10, color=ft.Colors.GREY_700
-                        )
-                        if c_addr
-                        else None,
-                        on_click=lambda e, name=c_name, phone=c_phone, addr=c_addr: select_customer(
-                            name, phone, addr
-                        ),
+                        title=ft.Text(f"{c_name} - {c_phone}", size=12, color=ft.Colors.BLACK),
+                        subtitle=ft.Text(f"العنوان: {c_addr}", size=10, color=ft.Colors.GREY_700) if c_addr else None,
+                        on_click=lambda e, name=c_name, phone=c_phone, addr=c_addr: select_customer(name, phone, addr),
                     )
                 )
             suggestions_container.visible = True
         else:
             suggestions_list.controls.append(
                 ft.ListTile(
-                    title=ft.Text(
-                        "لا يوجد عميل بهذا الرقم (اضغط للإضافة)",
-                        size=12,
-                        color=ft.Colors.RED_400,
-                    ),
+                    title=ft.Text("لا يوجد عميل بهذا الرقم (اضغط للإضافة)", size=12, color=ft.Colors.RED_400),
                     on_click=lambda e: select_customer("", query, ""),
                 )
             )
@@ -867,7 +553,6 @@ def SalesView(page: ft.Page):
 
         customer_name_field.visible = True
         customer_phone_field.visible = True
-        
         show_addr = is_delivery_switch.value
         customer_sector_field.visible = show_addr
         customer_building_field.visible = show_addr
@@ -894,9 +579,7 @@ def SalesView(page: ft.Page):
         for cat, count in db.get_category_counts():
             chips_row.controls.append(
                 ft.Chip(
-                    label=ft.Text(
-                        f"{cat} ({count})", size=12, weight=ft.FontWeight.W_600
-                    ),
+                    label=ft.Text(f"{cat} ({count})", size=12, weight=ft.FontWeight.W_600),
                     selected=(cat == state["category"]),
                     selected_color=ft.Colors.ORANGE_500,
                     on_click=lambda e, c=cat: select_category(c),
@@ -912,9 +595,7 @@ def SalesView(page: ft.Page):
         products_grid.controls.clear()
         items = db.get_products(search=state["search"], category=state["category"])
         if not items:
-            products_grid.controls.append(
-                ft.Text("مفيش منتجات مطابقة", color=ft.Colors.WHITE70)
-            )
+            products_grid.controls.append(ft.Text("مفيش منتجات مطابقة", color=ft.Colors.WHITE70))
         for p in items:
             products_grid.controls.append(product_card(p))
         page.update()
@@ -926,51 +607,18 @@ def SalesView(page: ft.Page):
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Container(
-                        content=ft.Text(category_icon(p["category"]), size=22),
-                        padding=6,
-                        bgcolor=ft.Colors.ORANGE_50,
-                        border_radius=50,
-                    ),
-                    ft.Text(
-                        p["name"],
-                        size=12,
-                        weight=ft.FontWeight.BOLD,
-                        text_align=ft.TextAlign.CENTER,
-                        max_lines=2,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        color=ft.Colors.BLACK,
-                    ),
-                    ft.Text(
-                        f'{p["price"]:.2f} ج.م',
-                        size=12,
-                        weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.GREEN_700,
-                    ),
-                    ft.Text(
-                        "خلص من المخزون"
-                        if out_of_stock
-                        else f'متاح: {p["stock"]:g} {unit_label}',
-                        size=10,
-                        weight=ft.FontWeight.W_500,
-                        color=ft.Colors.RED_600
-                        if out_of_stock
-                        else ft.Colors.GREY_700,
-                    ),
+                    ft.Container(content=ft.Text(category_icon(p["category"]), size=22), padding=6, bgcolor=ft.Colors.ORANGE_50, border_radius=50),
+                    ft.Text(p["name"], size=12, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.BLACK),
+                    ft.Text(f'{p["price"]:.2f} ج.م', size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_700),
+                    ft.Text("خلص من المخزون" if out_of_stock else f'متاح: {p["stock"]:g} {unit_label}', size=10, weight=ft.FontWeight.W_500, color=ft.Colors.RED_600 if out_of_stock else ft.Colors.GREY_700),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=2,
             ),
-            padding=8,
-            border_radius=12,
-            alignment=ft.Alignment.CENTER,
+            padding=8, border_radius=12, alignment=ft.Alignment.CENTER,
             bgcolor=ft.Colors.GREY_300 if out_of_stock else ft.Colors.WHITE,
-            shadow=ft.BoxShadow(
-                blur_radius=4,
-                color=ft.Colors.with_opacity(0.15, ft.Colors.BLACK),
-                offset=ft.Offset(0, 2),
-            ),
+            shadow=ft.BoxShadow(blur_radius=4, color=ft.Colors.with_opacity(0.15, ft.Colors.BLACK), offset=ft.Offset(0, 2)),
             on_click=None if out_of_stock else (lambda e, p=p: add_to_cart(p)),
         )
 
@@ -982,13 +630,7 @@ def SalesView(page: ft.Page):
             if new_qty <= p["stock"]:
                 cart[pid]["qty"] = new_qty
         else:
-            cart[pid] = {
-                "name": p["name"],
-                "price": p["price"],
-                "qty": min(step, p["stock"]),
-                "unit": p["unit"],
-                "stock": p["stock"],
-            }
+            cart[pid] = {"name": p["name"], "price": p["price"], "qty": min(step, p["stock"]), "unit": p["unit"], "stock": p["stock"]}
         refresh_cart()
 
     def change_qty(pid, delta):
@@ -1044,40 +686,23 @@ def SalesView(page: ft.Page):
             line_total = unit_price * item["qty"]
 
             qty_field = ft.TextField(
-                value=f'{item["qty"]:g}',
-                width=70,
-                height=38,
-                text_align=ft.TextAlign.CENTER,
-                content_padding=5,
-                color=ft.Colors.BLACK,
-                bgcolor=ft.Colors.GREY_100,
-                border_radius=8,
-                text_size=12,
-                keyboard_type=ft.KeyboardType.NUMBER,
-                border_color=ft.Colors.GREY_400,
-                focused_border_color=ft.Colors.ORANGE_500,
+                value=f'{item["qty"]:g}', width=70, height=38, text_align=ft.TextAlign.CENTER,
+                content_padding=5, color=ft.Colors.BLACK, bgcolor=ft.Colors.GREY_100,
+                border_radius=8, text_size=12, keyboard_type=ft.KeyboardType.NUMBER,
+                border_color=ft.Colors.GREY_400, focused_border_color=ft.Colors.ORANGE_500,
             )
 
             price_field = ft.TextField(
-                value=f"{line_total:.2f}",
-                width=80,
-                height=38,
-                text_align=ft.TextAlign.CENTER,
-                content_padding=5,
-                color=ft.Colors.BLACK,
-                bgcolor=ft.Colors.GREY_100,
-                border_radius=8,
-                text_size=12,
-                keyboard_type=ft.KeyboardType.NUMBER,
-                border_color=ft.Colors.GREY_400,
-                focused_border_color=ft.Colors.ORANGE_500,
+                value=f"{line_total:.2f}", width=80, height=38, text_align=ft.TextAlign.CENTER,
+                content_padding=5, color=ft.Colors.BLACK, bgcolor=ft.Colors.GREY_100,
+                border_radius=8, text_size=12, keyboard_type=ft.KeyboardType.NUMBER,
+                border_color=ft.Colors.GREY_400, focused_border_color=ft.Colors.ORANGE_500,
             )
 
             def make_on_qty_change(p_id, q_field, pr_field, u_price, stock_limit):
                 def on_qty_change(e):
                     txt = q_field.value.strip()
-                    if not txt:
-                        return
+                    if not txt: return
                     try:
                         val = float(txt)
                         val = min(val, stock_limit)
@@ -1087,16 +712,13 @@ def SalesView(page: ft.Page):
                         pr_field.value = f"{new_line_total:.2f}"
                         pr_field.update()
                         update_totals_only()
-                    except ValueError:
-                        pass
-
+                    except ValueError: pass
                 return on_qty_change
 
             def make_on_price_change(p_id, q_field, pr_field, u_price, stock_limit):
                 def on_price_change(e):
                     txt = pr_field.value.strip()
-                    if not txt:
-                        return
+                    if not txt: return
                     try:
                         val = float(txt)
                         if u_price > 0:
@@ -1106,55 +728,24 @@ def SalesView(page: ft.Page):
                             q_field.value = f"{calc_qty:g}"
                             q_field.update()
                             update_totals_only()
-                    except ValueError:
-                        pass
-
+                    except ValueError: pass
                 return on_price_change
 
-            qty_field.on_change = make_on_qty_change(
-                pid, qty_field, price_field, unit_price, item["stock"]
-            )
-            price_field.on_change = make_on_price_change(
-                pid, qty_field, price_field, unit_price, item["stock"]
-            )
+            qty_field.on_change = make_on_qty_change(pid, qty_field, price_field, unit_price, item["stock"])
+            price_field.on_change = make_on_price_change(pid, qty_field, price_field, unit_price, item["stock"])
 
             cart_list.controls.append(
                 ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text(
-                                item["name"],
-                                expand=True,
-                                size=13,
-                                weight=ft.FontWeight.W_600,
-                                color=ft.Colors.BLACK,
-                            ),
-                            ft.IconButton(
-                                ft.Icons.REMOVE_CIRCLE_OUTLINE,
-                                icon_size=20,
-                                icon_color=ft.Colors.RED_600,
-                                on_click=lambda e, pid=pid, s=step: change_qty(
-                                    pid, -s
-                                ),
-                            ),
-                            qty_field,
-                            ft.Text(unit_label, size=11, color=ft.Colors.GREY_700),
-                            ft.IconButton(
-                                ft.Icons.ADD_CIRCLE_OUTLINE,
-                                icon_size=20,
-                                icon_color=ft.Colors.GREEN_700,
-                                on_click=lambda e, pid=pid, s=step: change_qty(
-                                    pid, s
-                                ),
-                            ),
-                            price_field,
-                            ft.Text("ج.م", size=11, color=ft.Colors.GREY_700),
-                        ],
-                        spacing=4,
-                    ),
-                    padding=6,
-                    bgcolor=ft.Colors.WHITE,
-                    border_radius=8,
+                    content=ft.Row([
+                        ft.Text(item["name"], expand=True, size=13, weight=ft.FontWeight.W_600, color=ft.Colors.BLACK),
+                        ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_size=20, icon_color=ft.Colors.RED_600, on_click=lambda e, pid=pid, s=step: change_qty(pid, -s)),
+                        qty_field,
+                        ft.Text(unit_label, size=11, color=ft.Colors.GREY_700),
+                        ft.IconButton(ft.Icons.ADD_CIRCLE_OUTLINE, icon_size=20, icon_color=ft.Colors.GREEN_700, on_click=lambda e, pid=pid, s=step: change_qty(pid, s)),
+                        price_field,
+                        ft.Text("ج.م", size=11, color=ft.Colors.GREY_700),
+                    ], spacing=4),
+                    padding=6, bgcolor=ft.Colors.WHITE, border_radius=8,
                 )
             )
 
@@ -1188,9 +779,7 @@ def SalesView(page: ft.Page):
 
         if needs_customer:
             if not customer_name_field.value or not customer_phone_field.value:
-                status_text.value = (
-                    "البيع الآجل والدليفري يتطلبان اسم العميل ورقم تليفونه"
-                )
+                status_text.value = "البيع الآجل والدليفري يتطلبان اسم العميل ورقم تليفونه"
                 page.update()
                 return
             if is_delivery and (not customer_sector_field.value or not customer_building_field.value):
@@ -1269,106 +858,46 @@ def SalesView(page: ft.Page):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         rows = [
             ft.Row([
-                ft.Text(
-                    it["product_name"], expand=True, size=13, color=ft.Colors.BLACK
-                ),
-                ft.Text(
-                    f'{it["quantity"]:g} {"كجم" if it["unit"] == "كيلو" else "قطعة"}',
-                    size=12,
-                    color=ft.Colors.BLACK,
-                ),
-                ft.Text(
-                    f'{it["quantity"] * it["unit_price"]:.2f} ج.م',
-                    size=12,
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.BLACK,
-                ),
+                ft.Text(it["product_name"], expand=True, size=13, color=ft.Colors.BLACK),
+                ft.Text(f'{it["quantity"]:g} {"كجم" if it["unit"] == "كيلو" else "قطعة"}', size=12, color=ft.Colors.BLACK),
+                ft.Text(f'{it["quantity"] * it["unit_price"]:.2f} ج.م', size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
             ])
             for it in items
         ]
 
         totals_rows = [
-            ft.Row([
-                ft.Text("الخصم", color=ft.Colors.GREY_700),
-                ft.Text(f"{discount:.2f} ج.م", color=ft.Colors.BLACK),
-            ]),
+            ft.Row([ft.Text("الخصم", color=ft.Colors.GREY_700), ft.Text(f"{discount:.2f} ج.م", color=ft.Colors.BLACK)]),
         ]
         if delivery_fee:
             totals_rows.append(
-                ft.Row([
-                    ft.Text("رسوم التوصيل", color=ft.Colors.GREY_700),
-                    ft.Text(f"{delivery_fee:.2f} ج.م", color=ft.Colors.BLACK),
-                ])
+                ft.Row([ft.Text("رسوم التوصيل", color=ft.Colors.GREY_700), ft.Text(f"{delivery_fee:.2f} ج.م", color=ft.Colors.BLACK)])
             )
 
         invoice_info_controls = [
-            ft.Row([
-                ft.Text("رقم الفاتورة", color=ft.Colors.GREY_700),
-                ft.Text(
-                    serial, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK
-                ),
-            ]),
-            ft.Row([
-                ft.Text("التاريخ والوقت", color=ft.Colors.GREY_700),
-                ft.Text(now_str, color=ft.Colors.BLACK),
-            ]),
-            ft.Row([
-                ft.Text("طريقة الدفع", color=ft.Colors.GREY_700),
-                ft.Text(
-                    payment_type,
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.BLUE_700,
-                ),
-            ]),
-            ft.Row([
-                ft.Text("نوع الطلب", color=ft.Colors.GREY_700),
-                ft.Text(
-                    "دليفري 🛵" if is_delivery else "استلام من الفرع",
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.ORANGE_700,
-                ),
-            ]),
+            ft.Row([ft.Text("رقم الفاتورة", color=ft.Colors.GREY_700), ft.Text(serial, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK)]),
+            ft.Row([ft.Text("التاريخ والوقت", color=ft.Colors.GREY_700), ft.Text(now_str, color=ft.Colors.BLACK)]),
+            ft.Row([ft.Text("طريقة الدفع", color=ft.Colors.GREY_700), ft.Text(payment_type, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_700)]),
+            ft.Row([ft.Text("نوع الطلب", color=ft.Colors.GREY_700), ft.Text("دليفري 🛵" if is_delivery else "استلام من الفرع", weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_700)]),
         ]
 
         if is_delivery and customer_address:
             invoice_info_controls.extend([
-                ft.Row([
-                    ft.Text("اسم العميل", color=ft.Colors.GREY_700),
-                    ft.Text(customer_name or "-", weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
-                ]),
-                ft.Row([
-                    ft.Text("رقم التليفون", color=ft.Colors.GREY_700),
-                    ft.Text(customer_phone or "-", color=ft.Colors.BLACK),
-                ]),
-                ft.Row([
-                    ft.Text("عنوان التوصيل", color=ft.Colors.GREY_700),
-                    ft.Text(customer_address, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
-                ]),
+                ft.Row([ft.Text("اسم العميل", color=ft.Colors.GREY_700), ft.Text(customer_name or "-", weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK)]),
+                ft.Row([ft.Text("رقم التليفون", color=ft.Colors.GREY_700), ft.Text(customer_phone or "-", color=ft.Colors.BLACK)]),
+                ft.Row([ft.Text("عنوان التوصيل", color=ft.Colors.GREY_700), ft.Text(customer_address, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK)]),
             ])
 
         invoice_view.controls = [
             ft.Row([
                 ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_400, size=30),
-                ft.Text(
-                    "تمت عملية البيع بنجاح 🎉",
-                    size=20,
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.WHITE,
-                ),
+                ft.Text("تمت عملية البيع بنجاح 🎉", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
             ]),
             ft.Container(
-                padding=20,
-                border_radius=16,
-                bgcolor=ft.Colors.WHITE,
-                shadow=ft.BoxShadow(
-                    blur_radius=10,
-                    color=ft.Colors.with_opacity(0.2, ft.Colors.BLACK),
-                    offset=ft.Offset(0, 4),
-                ),
+                padding=20, border_radius=16, bgcolor=ft.Colors.WHITE,
+                shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.2, ft.Colors.BLACK), offset=ft.Offset(0, 4)),
                 content=ft.Column([
                     ft.Row([
-                        ft.Image(src=logo_path, height=40, fit=ft.BoxFit.CONTAIN)
-                        if logo_path else ft.Icon(ft.Icons.PETS, color=ft.Colors.ORANGE_700, size=30),
+                        ft.Image(src=logo_path, height=40, fit=ft.BoxFit.CONTAIN) if logo_path else ft.Icon(ft.Icons.PETS, color=ft.Colors.ORANGE_700, size=30),
                         ft.Column([
                             ft.Text(SHOP_NAME, weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLACK),
                             ft.Text(SHOP_ADDRESS, size=10, color=ft.Colors.GREY_700),
@@ -1383,34 +912,19 @@ def SalesView(page: ft.Page):
                     ft.Divider(),
                     *totals_rows,
                     ft.Row([
-                        ft.Text(
-                            "الإجمالي",
-                            weight=ft.FontWeight.BOLD,
-                            size=16,
-                            color=ft.Colors.BLACK,
-                        ),
-                        ft.Text(
-                            f"{total:.2f} ج.م",
-                            weight=ft.FontWeight.BOLD,
-                            size=18,
-                            color=ft.Colors.GREEN_800,
-                        ),
+                        ft.Text("الإجمالي", weight=ft.FontWeight.BOLD, size=16, color=ft.Colors.BLACK),
+                        ft.Text(f"{total:.2f} ج.م", weight=ft.FontWeight.BOLD, size=18, color=ft.Colors.GREEN_800),
                     ]),
                 ]),
             ),
             ft.Container(height=10),
             ft.Row(
                 [
-                    # 🔥 تم تغيير زر الطباعة لاستخدام المعاينة بدلاً من الطباعة المباشرة
                     ft.ElevatedButton(
                         "🖨️ معاينة / طباعة",
                         icon=ft.Icons.PREVIEW,
-                        bgcolor=ft.Colors.BLUE_700,
-                        color=ft.Colors.WHITE,
-                        style=ft.ButtonStyle(
-                            padding=15,
-                            shape=ft.RoundedRectangleBorder(radius=10),
-                        ),
+                        bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE,
+                        style=ft.ButtonStyle(padding=15, shape=ft.RoundedRectangleBorder(radius=10)),
                         on_click=lambda e: show_invoice_preview_with_actions(
                             page, serial, now_str, items, discount, delivery_fee, total, 
                             payment_type, is_delivery, customer_name, customer_phone, customer_address
@@ -1419,12 +933,8 @@ def SalesView(page: ft.Page):
                     ft.ElevatedButton(
                         "بيع جديد 🛒",
                         icon=ft.Icons.ADD_SHOPPING_CART,
-                        bgcolor=ft.Colors.ORANGE_700,
-                        color=ft.Colors.WHITE,
-                        style=ft.ButtonStyle(
-                            padding=15,
-                            shape=ft.RoundedRectangleBorder(radius=10),
-                        ),
+                        bgcolor=ft.Colors.ORANGE_700, color=ft.Colors.WHITE,
+                        style=ft.ButtonStyle(padding=15, shape=ft.RoundedRectangleBorder(radius=10)),
                         on_click=lambda e: new_sale(),
                     ),
                 ],
@@ -1447,33 +957,11 @@ def SalesView(page: ft.Page):
 
     header_bar = ft.Row(
         [
-            ft.Row(
-                [
-                    ft.Image(
-                        src=logo_path,
-                        height=60,
-                        fit=ft.BoxFit.CONTAIN,
-                    )
-                    if logo_path
-                    else ft.Icon(
-                        ft.Icons.PETS, color=ft.Colors.ORANGE_400, size=32
-                    ),
-                    ft.Text(
-                        "Aleefy Pets",
-                        size=24,
-                        weight=ft.FontWeight.BOLD,
-                        color=ft.Colors.WHITE,
-                    ),
-                ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            ft.Text(
-                "نقطة البيع 🐾",
-                size=15,
-                color=ft.Colors.ORANGE_300,
-                weight=ft.FontWeight.W_600,
-            ),
+            ft.Row([
+                ft.Image(src=logo_path, height=60, fit=ft.BoxFit.CONTAIN) if logo_path else ft.Icon(ft.Icons.PETS, color=ft.Colors.ORANGE_400, size=32),
+                ft.Text("Aleefy Pets", size=24, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+            ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text("نقطة البيع 🐾", size=15, color=ft.Colors.ORANGE_300, weight=ft.FontWeight.W_600),
         ],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
     )
@@ -1482,10 +970,7 @@ def SalesView(page: ft.Page):
         header_bar,
         search_field,
         chips_row,
-        ft.Container(
-            content=products_grid,
-            height=320,
-        ),
+        ft.Container(content=products_grid, height=320),
         ft.Divider(color=ft.Colors.WHITE24),
         ft.Text("السلة 🛒", weight=ft.FontWeight.BOLD, size=15, color=ft.Colors.WHITE),
         cart_list,
@@ -1493,40 +978,21 @@ def SalesView(page: ft.Page):
         subtotal_text,
         total_text,
         ft.Container(height=4),
-        ft.Row(
-            [
-                ft.Column([
-                    ft.Text(
-                        "طريقة الدفع:",
-                        weight=ft.FontWeight.W_600,
-                        color=ft.Colors.WHITE,
-                        size=13,
-                    ),
-                    payment_type_radio,
-                ]),
-                is_delivery_switch,
-            ],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            wrap=True,
-        ),
+        ft.Row([
+            ft.Column([
+                ft.Text("طريقة الدفع:", weight=ft.FontWeight.W_600, color=ft.Colors.WHITE, size=13),
+                payment_type_radio,
+            ]),
+            is_delivery_switch,
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
         ft.Row([customer_name_field, customer_phone_field], spacing=10),
         suggestions_container,
-        ft.Row(
-            [
-                customer_sector_field,
-                customer_building_field,
-                customer_apartment_field,
-            ],
-            spacing=8,
-        ),
-        checkout_btn,
-        status_text,
+        ft.Row([customer_sector_field, customer_building_field, customer_apartment_field], spacing=8),
+        ft.Row([otg_switch, checkout_btn], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
     ]
 
     return ft.Container(
-        content=ft.Column(
-            [pos_view, invoice_view], expand=True, scroll=ft.ScrollMode.AUTO
-        ),
+        content=ft.Column([pos_view, invoice_view], expand=True, scroll=ft.ScrollMode.AUTO),
         padding=12,
         expand=True,
     )
