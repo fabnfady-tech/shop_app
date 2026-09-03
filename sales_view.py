@@ -12,10 +12,30 @@ import socket
 import arabic_reshaper
 from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
+from pathlib import Path  # ✅ أضفناها عشان التعامل مع المجلدات
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "amiri-regular.ttf")
+
+# ابحث عن خط عريض حقيقي لو موجود (نتيجة أوضح بكتير من تكبير الخط العادي)
+FONT_BOLD_CANDIDATES = ["amiri-bold.ttf", "Amiri-Bold.ttf", "AmiriQuran-Bold.ttf"]
+FONT_BOLD_PATH = next(
+    (os.path.join(BASE_DIR, name) for name in FONT_BOLD_CANDIDATES
+     if os.path.exists(os.path.join(BASE_DIR, name))),
+    None
+)
+
+# عرض الطباعة بالبكسل:
+#   576 = طابعات 80mm بدقة 203dpi (الافتراضي)
+#   384 = طابعات 58mm بدقة 203dpi
+# لو طابعتك 58mm وطلعت الفاتورة متمددة/مش واضحة، غيّر الرقم ده لـ 384
+PRINTER_WIDTH_PX = 576
+
+# حد الأبيض/الأسود (Threshold) المستخدم في تحويل الصورة لطباعة حرارية.
+# لو الحروف طلعت باهتة/متقطعة زوّد الرقم شوية (مثلاً 210-220).
+# لو الحروف طلعت سميكة زيادة وملتصقة، قلّل الرقم شوية (مثلاً 180-190).
+BW_THRESHOLD = 205
 
 # ------------------------------------------------------------------
 # بيانات المحل التي تظهر في الفاتورة المطبوعة
@@ -64,11 +84,12 @@ def parse_stored_address(address_str):
 
     return sector, building, apartment
 
+
 def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     """
     توليد صورة الفاتورة للطباعة الحرارية بأحجام خطوط كبيرة ومسافات واضحة.
     """
-    width = 576  # العرض المباشر لطابعات 80mm (يمكن تغييره إلى 384 لطابعات 58mm)
+    width = PRINTER_WIDTH_PX
     padding = 20
     
     font_regular = None
@@ -96,15 +117,23 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     if not font_regular:
         font_regular = font_bold = font_title = ImageFont.load_default()
 
+    # لو لقينا ملف Bold حقيقي، استخدمه بدل تكبير الخط العادي
+    if FONT_BOLD_PATH:
+        try:
+            font_bold = ImageFont.truetype(FONT_BOLD_PATH, 34)
+            font_title = ImageFont.truetype(FONT_BOLD_PATH, 42)
+        except Exception:
+            pass
+
     img_temp = Image.new("RGB", (width, 3000), "white")
     draw = ImageDraw.Draw(img_temp)
     
     y = 25
 
-    def draw_text(text, font, align="center", fill="black", spacing=46):
+    def draw_text(text, font, align="center", fill="black", spacing=46, stroke=0):
         nonlocal y
         text_ar = ar(text)
-        bbox = draw.textbbox((0, 0), text_ar, font=font)
+        bbox = draw.textbbox((0, 0), text_ar, font=font, stroke_width=stroke)
         w = bbox[2] - bbox[0]
         
         if align == "center":
@@ -114,7 +143,7 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
         else:
             x = padding
 
-        draw.text((x, y), text_ar, fill=fill, font=font)
+        draw.text((x, y), text_ar, fill=fill, font=font, stroke_width=stroke, stroke_fill=fill)
         y += spacing
 
     def draw_line(dash=False):
@@ -220,19 +249,17 @@ def generate_invoice_image(inv_number, date_str, items, discount, delivery_fee, 
     return temp_img_path, final_img
 
 
-def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=576):
+def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width=PRINTER_WIDTH_PX):
     """
     تحويل الفاتورة لأوامر ESC/POS Raster وإرسالها لـ RawBT عبر Localhost تلقائياً.
-    تستخدم الحد الأدنى للتنقيط (Thresholding) لجعل النصوص سوداء حادة 100%.
     """
     try:
         w_percent = printer_width / float(final_img.width)
         h_size = int(float(final_img.height) * float(w_percent))
         resized_img = final_img.resize((printer_width, h_size), Image.Resampling.LANCZOS)
 
-        # تحويل الصورة إلى تدرج رمادي ثم تطبيق حد نقي للأسود والأبيض لمنع التنقيط الرمادي الباهت
         gray_img = resized_img.convert("L")
-        bw_img = gray_img.point(lambda x: 0 if x < 200 else 255, "1")
+        bw_img = gray_img.point(lambda x: 0 if x < BW_THRESHOLD else 255, "1")
 
         width, height = bw_img.size
         width_bytes = (width + 7) // 8
@@ -270,7 +297,7 @@ def send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1", port=9100, printer_width
 
 def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name="", customer_phone="", customer_address=""):
     """
-    الطباعة التلقائية عبر 127.0.0.1 لتعمل مع RawBT مباشرة سواء في التجربة أو عند توصيل USB OTG
+    الطباعة التلقائية عبر 127.0.0.1 (تُستخدم للطباعة المباشرة دون معاينة)
     """
     try:
         _, final_img = generate_invoice_image(
@@ -293,6 +320,268 @@ def print_invoice_otg(page, inv_number, date_str, items, discount, delivery_fee,
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
+
+# ============================================================
+# 🔥 الوظائف الجديدة (معاينة + حفظ + طباعة ذكية) 🔥
+# ============================================================
+
+def save_invoice_image(inv_number, final_img):
+    """
+    حفظ صورة الفاتورة في مجلد خاص على التلفون
+    """
+    try:
+        # مجلد الصور في التلفون (Android) أو Windows
+        if os.name == 'posix':  # Android / Linux
+            pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures", "AleefyPets")
+        else:  # Windows
+            pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures", "AleefyPets")
+        
+        # إنشاء المجلد لو مش موجود
+        Path(pictures_dir).mkdir(parents=True, exist_ok=True)
+        
+        # اسم الملف بالتاريخ
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"invoice_{inv_number}_{timestamp}.png"
+        filepath = os.path.join(pictures_dir, filename)
+        
+        # حفظ الصورة
+        final_img.save(filepath)
+        
+        return filepath, pictures_dir
+        
+    except Exception as ex:
+        print(f"خطأ في حفظ الصورة: {ex}")
+        return None, None
+
+
+def print_or_save_invoice(page, inv_number, date_str, items, discount, delivery_fee, total, 
+                          payment_type, is_delivery, customer_name="", customer_phone="", 
+                          customer_address=""):
+    """
+    محاولة الطباعة على OTG، لو فشلت تحفظ الصورة في التلفون
+    """
+    try:
+        temp_path, final_img = generate_invoice_image(
+            inv_number, date_str, items, discount, delivery_fee, total, 
+            payment_type, is_delivery, customer_name, customer_phone, customer_address
+        )
+        
+        success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
+        
+        if success:
+            snack = ft.SnackBar(
+                ft.Text(f"✅ {msg}"), 
+                bgcolor=ft.Colors.GREEN_700,
+                duration=3000
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return
+        
+        # لو فشلت الطباعة، احفظ الصورة
+        saved_path, folder = save_invoice_image(inv_number, final_img)
+        
+        if saved_path and os.path.exists(saved_path):
+            snack = ft.SnackBar(
+                ft.Text(f"⚠️ الطباعة غير متوفرة\n📁 تم حفظ الفاتورة في:\n{folder}"), 
+                bgcolor=ft.Colors.ORANGE_700,
+                duration=5000
+            )
+        else:
+            saved_path = temp_path
+            snack = ft.SnackBar(
+                ft.Text(f"⚠️ تم حفظ الصورة مؤقتاً في:\n{temp_path}"), 
+                bgcolor=ft.Colors.ORANGE_700,
+                duration=5000
+            )
+        
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
+        
+    except Exception as ex:
+        snack = ft.SnackBar(
+            ft.Text(f"❌ خطأ: {ex}"), 
+            bgcolor=ft.Colors.RED_700,
+            duration=4000
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
+
+
+def close_dialog(dialog, page):
+    dialog.open = False
+    page.update()
+
+
+def save_image_only(page, dialog):
+    """حفظ الصورة فقط في التلفون"""
+    try:
+        final_img = getattr(page, 'invoice_img', None)
+        inv_number = getattr(page, 'invoice_number', '0000')
+        
+        if not final_img:
+            snack = ft.SnackBar(
+                ft.Text("⚠️ لا توجد صورة للحفظ"), 
+                bgcolor=ft.Colors.RED_700
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return
+        
+        saved_path, folder = save_invoice_image(inv_number, final_img)
+        
+        if saved_path and os.path.exists(saved_path):
+            dialog.open = False
+            snack = ft.SnackBar(
+                ft.Text(f"✅ تم الحفظ في:\n{folder}"), 
+                bgcolor=ft.Colors.GREEN_700,
+                duration=4000
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+        else:
+            snack = ft.SnackBar(
+                ft.Text("❌ فشل حفظ الصورة"), 
+                bgcolor=ft.Colors.RED_700
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            
+    except Exception as ex:
+        snack = ft.SnackBar(
+            ft.Text(f"❌ خطأ: {ex}"), 
+            bgcolor=ft.Colors.RED_700
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
+
+
+def print_invoice_only(page, dialog):
+    """طباعة الفاتورة فقط على OTG"""
+    try:
+        final_img = getattr(page, 'invoice_img', None)
+        
+        if not final_img:
+            snack = ft.SnackBar(
+                ft.Text("⚠️ لا توجد صورة للطباعة"), 
+                bgcolor=ft.Colors.RED_700
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            return
+        
+        success, msg = send_to_rawbt_wifi(final_img, rawbt_ip="127.0.0.1")
+        
+        if success:
+            dialog.open = False
+            snack = ft.SnackBar(
+                ft.Text(f"✅ {msg}"), 
+                bgcolor=ft.Colors.GREEN_700,
+                duration=3000
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+        else:
+            snack = ft.SnackBar(
+                ft.Text(f"❌ فشل الطباعة: {msg}\n💾 استخدم زر الحفظ بدلاً من ذلك"), 
+                bgcolor=ft.Colors.RED_700,
+                duration=5000
+            )
+            page.overlay.append(snack)
+            snack.open = True
+            page.update()
+            
+    except Exception as ex:
+        snack = ft.SnackBar(
+            ft.Text(f"❌ خطأ في الطباعة: {ex}"), 
+            bgcolor=ft.Colors.RED_700
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
+
+
+def show_invoice_preview_with_actions(page, inv_number, date_str, items, discount, 
+                                       delivery_fee, total, payment_type, is_delivery, 
+                                       customer_name="", customer_phone="", customer_address=""):
+    """
+    عرض معاينة الفاتورة مع خيارات: طباعة أو حفظ
+    """
+    try:
+        temp_path, final_img = generate_invoice_image(
+            inv_number, date_str, items, discount, delivery_fee, total, 
+            payment_type, is_delivery, customer_name, customer_phone, customer_address
+        )
+        
+        # خزن الصورة في الـ page عشان الأزرار تستخدمها
+        page.invoice_img = final_img
+        page.invoice_path = temp_path
+        page.invoice_number = inv_number
+        
+        dialog = ft.AlertDialog(
+            title=ft.Text("معاينة الفاتورة 🖨️", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Image(src=temp_path, width=400, height=500, fit=ft.BoxFit.CONTAIN),
+                    ft.Row([
+                        ft.Icon(ft.Icons.INFO, color=ft.Colors.BLUE_400, size=16),
+                        ft.Text("تأكد من الصورة قبل الطباعة", size=12, color=ft.Colors.GREY_400)
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=4),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                width=450,
+                padding=10,
+            ),
+            actions=[
+                ft.TextButton(
+                    "إغلاق", 
+                    on_click=lambda e: close_dialog(dialog, page),
+                    icon=ft.Icons.CLOSE
+                ),
+                ft.ElevatedButton(
+                    "💾 حفظ في التلفون", 
+                    on_click=lambda e: save_image_only(page, dialog),
+                    bgcolor=ft.Colors.BLUE_600,
+                    color=ft.Colors.WHITE,
+                    icon=ft.Icons.SAVE
+                ),
+                ft.ElevatedButton(
+                    "🖨️ طباعة OTG", 
+                    on_click=lambda e: print_invoice_only(page, dialog),
+                    bgcolor=ft.Colors.GREEN_600,
+                    color=ft.Colors.WHITE,
+                    icon=ft.Icons.PRINT
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.CENTER,
+        )
+        
+        page.dialog = dialog
+        dialog.open = True
+        page.update()
+        
+    except Exception as ex:
+        snack = ft.SnackBar(
+            ft.Text(f"❌ خطأ في المعاينة: {ex}"), 
+            bgcolor=ft.Colors.RED_700
+        )
+        page.overlay.append(snack)
+        snack.open = True
+        page.update()
+
+
+# ============================================================
+# نهاية الوظائف الجديدة
+# ============================================================
 
 
 CATEGORY_ICONS = {
@@ -1112,17 +1401,19 @@ def SalesView(page: ft.Page):
             ft.Container(height=10),
             ft.Row(
                 [
+                    # 🔥 تم تغيير زر الطباعة لاستخدام المعاينة بدلاً من الطباعة المباشرة
                     ft.ElevatedButton(
-                        "طباعة الفاتورة 🖨️",
-                        icon=ft.Icons.PRINT,
+                        "🖨️ معاينة / طباعة",
+                        icon=ft.Icons.PREVIEW,
                         bgcolor=ft.Colors.BLUE_700,
                         color=ft.Colors.WHITE,
                         style=ft.ButtonStyle(
                             padding=15,
                             shape=ft.RoundedRectangleBorder(radius=10),
                         ),
-                        on_click=lambda e: print_invoice_otg(
-                            page, serial, now_str, items, discount, delivery_fee, total, payment_type, is_delivery, customer_name, customer_phone, customer_address
+                        on_click=lambda e: show_invoice_preview_with_actions(
+                            page, serial, now_str, items, discount, delivery_fee, total, 
+                            payment_type, is_delivery, customer_name, customer_phone, customer_address
                         ),
                     ),
                     ft.ElevatedButton(
